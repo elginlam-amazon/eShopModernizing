@@ -12,10 +12,10 @@
                 @Html.DisplayNameFor(model => model.Description)
             </th>
             <th>
-                @Html.DisplayNameFor(model => model.CatalogBrand.Brand)
+                @Html.DisplayNameFor(model => model.CatalogBrand!.Brand)
             </th>
             <th>
-                @Html.DisplayNameFor(model => model.CatalogType.Type)
+                @Html.DisplayNameFor(model => model.CatalogType!.Type)
             </th>
             <th>
                 @Html.DisplayNameFor(model => model.Price)
@@ -49,10 +49,10 @@
                     @Html.DisplayFor(modelItem => item.Description)
                 </td>
                 <td>
-                    @Html.DisplayFor(modelItem => item.CatalogBrand.Brand)
+                    @Html.DisplayFor(modelItem => item.CatalogBrand!.Brand)
                 </td>
                 <td>
-                    @Html.DisplayFor(modelItem => item.CatalogType.Type)
+                    @Html.DisplayFor(modelItem => item.CatalogType!.Type)
                 </td>
                 <td class="esh-table-price">
                     @Html.DisplayFor(modelItem => item.Price)
