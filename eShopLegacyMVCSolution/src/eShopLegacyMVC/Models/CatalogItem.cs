@@ -1,4 +1,4 @@
-﻿using System.ComponentModel;
+using System.ComponentModel;
 using System.ComponentModel.DataAnnotations;
 
 namespace eShopLegacyMVC.Models
@@ -11,6 +11,7 @@ namespace eShopLegacyMVC.Models
         {
             PictureFileName = DefaultPictureName;
         }
+
         public int Id { get; set; }
 
         [Required]
@@ -56,9 +57,6 @@ namespace eShopLegacyMVC.Models
         [Display(Name = "Max stock")]
         public int MaxStockThreshold { get; set; }
 
-        /// <summary>
-        /// True if item is on reorder
-        /// </summary>
         public bool OnReorder { get; set; }
     }
 }

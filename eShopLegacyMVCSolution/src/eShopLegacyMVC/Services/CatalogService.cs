@@ -1,16 +1,15 @@
-﻿using eShopLegacyMVC.Models;
-using System.Collections.Generic;
-using System.Data.Entity;
-using System.Linq;
+using eShopLegacyMVC.Models;
 using eShopLegacyMVC.ViewModel;
+using Microsoft.EntityFrameworkCore;
+using System.Collections.Generic;
+using System.Linq;
 
 namespace eShopLegacyMVC.Services
 {
-
     public class CatalogService : ICatalogService
     {
-        private CatalogDBContext db;
-        private CatalogItemHiLoGenerator indexGenerator;
+        private readonly CatalogDBContext db;
+        private readonly CatalogItemHiLoGenerator indexGenerator;
 
         public CatalogService(CatalogDBContext db, CatalogItemHiLoGenerator indexGenerator)
         {
@@ -36,16 +35,20 @@ namespace eShopLegacyMVC.Services
 
         public CatalogItem FindCatalogItem(int id)
         {
-            return db.CatalogItems.Include(c => c.CatalogBrand).Include(c => c.CatalogType).FirstOrDefault(ci => ci.Id == id);
+            return db.CatalogItems
+                .Include(c => c.CatalogBrand)
+                .Include(c => c.CatalogType)
+                .FirstOrDefault(ci => ci.Id == id);
         }
+
         public IEnumerable<CatalogType> GetCatalogTypes()
         {
-            return db.CatalogTypes;
+            return db.CatalogTypes.ToList();
         }
 
         public IEnumerable<CatalogBrand> GetCatalogBrands()
         {
-            return db.CatalogBrands;
+            return db.CatalogBrands.ToList();
         }
 
         public void CreateCatalogItem(CatalogItem catalogItem)

@@ -1,67 +1,64 @@
-﻿using System.Collections.Generic;
-using System.Net;
-using System.Web.Mvc;
 using eShopLegacyMVC.Models;
 using eShopLegacyMVC.Services;
-using log4net;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Mvc.Rendering;
+using Microsoft.Extensions.Logging;
+using System.Collections.Generic;
 
 namespace eShopLegacyMVC.Controllers
 {
     public class CatalogController : Controller
     {
-        private static readonly ILog _log = LogManager.GetLogger(System.Reflection.MethodBase.GetCurrentMethod().DeclaringType);
+        private readonly ILogger<CatalogController> _logger;
+        private readonly ICatalogService service;
 
-        private ICatalogService service;
-
-        public CatalogController(ICatalogService service)
+        public CatalogController(ICatalogService service, ILogger<CatalogController> logger)
         {
             this.service = service;
+            _logger = logger;
         }
 
         // GET /[?pageSize=3&pageIndex=10]
-        public ActionResult Index(int pageSize = 10, int pageIndex = 0)
+        public IActionResult Index(int pageSize = 10, int pageIndex = 0)
         {
-            _log.Info($"Now loading... /Catalog/Index?pageSize={pageSize}&pageIndex={pageIndex}");
+            _logger.LogInformation("Now loading... /Catalog/Index?pageSize={PageSize}&pageIndex={PageIndex}", pageSize, pageIndex);
             var paginatedItems = service.GetCatalogItemsPaginated(pageSize, pageIndex);
             ChangeUriPlaceholder(paginatedItems.Data);
             return View(paginatedItems);
         }
 
         // GET: Catalog/Details/5
-        public ActionResult Details(int? id)
+        public IActionResult Details(int? id)
         {
-            _log.Info($"Now loading... /Catalog/Details?id={id}");
+            _logger.LogInformation("Now loading... /Catalog/Details?id={Id}", id);
             if (id == null)
             {
-                return new HttpStatusCodeResult(HttpStatusCode.BadRequest);
+                return BadRequest();
             }
             CatalogItem catalogItem = service.FindCatalogItem(id.Value);
             if (catalogItem == null)
             {
-                return HttpNotFound();
+                return NotFound();
             }
             AddUriPlaceHolder(catalogItem);
-
             return View(catalogItem);
         }
 
         // GET: Catalog/Create
-        public ActionResult Create()
+        public IActionResult Create()
         {
-            _log.Info($"Now loading... /Catalog/Create");
+            _logger.LogInformation("Now loading... /Catalog/Create");
             ViewBag.CatalogBrandId = new SelectList(service.GetCatalogBrands(), "Id", "Brand");
             ViewBag.CatalogTypeId = new SelectList(service.GetCatalogTypes(), "Id", "Type");
             return View(new CatalogItem());
         }
 
         // POST: Catalog/Create
-        // To protect from overposting attacks, please enable the specific properties you want to bind to, for 
-        // more details see https://go.microsoft.com/fwlink/?LinkId=317598.
         [HttpPost]
         [ValidateAntiForgeryToken]
-        public ActionResult Create([Bind(Include = "Id,Name,Description,Price,PictureFileName,CatalogTypeId,CatalogBrandId,AvailableStock,RestockThreshold,MaxStockThreshold,OnReorder")] CatalogItem catalogItem)
+        public IActionResult Create([Bind("Id,Name,Description,Price,PictureFileName,CatalogTypeId,CatalogBrandId,AvailableStock,RestockThreshold,MaxStockThreshold,OnReorder")] CatalogItem catalogItem)
         {
-            _log.Info($"Now processing... /Catalog/Create?catalogItemName={catalogItem.Name}");
+            _logger.LogInformation("Now processing... /Catalog/Create?catalogItemName={Name}", catalogItem.Name);
             if (ModelState.IsValid)
             {
                 service.CreateCatalogItem(catalogItem);
@@ -74,17 +71,17 @@ namespace eShopLegacyMVC.Controllers
         }
 
         // GET: Catalog/Edit/5
-        public ActionResult Edit(int? id)
+        public IActionResult Edit(int? id)
         {
-            _log.Info($"Now loading... /Catalog/Edit?id={id}");
+            _logger.LogInformation("Now loading... /Catalog/Edit?id={Id}", id);
             if (id == null)
             {
-                return new HttpStatusCodeResult(HttpStatusCode.BadRequest);
+                return BadRequest();
             }
             CatalogItem catalogItem = service.FindCatalogItem(id.Value);
             if (catalogItem == null)
             {
-                return HttpNotFound();
+                return NotFound();
             }
             AddUriPlaceHolder(catalogItem);
             ViewBag.CatalogBrandId = new SelectList(service.GetCatalogBrands(), "Id", "Brand", catalogItem.CatalogBrandId);
@@ -93,13 +90,11 @@ namespace eShopLegacyMVC.Controllers
         }
 
         // POST: Catalog/Edit/5
-        // To protect from overposting attacks, please enable the specific properties you want to bind to, for 
-        // more details see https://go.microsoft.com/fwlink/?LinkId=317598.
         [HttpPost]
         [ValidateAntiForgeryToken]
-        public ActionResult Edit([Bind(Include = "Id,Name,Description,Price,PictureFileName,CatalogTypeId,CatalogBrandId,AvailableStock,RestockThreshold,MaxStockThreshold,OnReorder")] CatalogItem catalogItem)
+        public IActionResult Edit([Bind("Id,Name,Description,Price,PictureFileName,CatalogTypeId,CatalogBrandId,AvailableStock,RestockThreshold,MaxStockThreshold,OnReorder")] CatalogItem catalogItem)
         {
-            _log.Info($"Now processing... /Catalog/Edit?id={catalogItem.Id}");
+            _logger.LogInformation("Now processing... /Catalog/Edit?id={Id}", catalogItem.Id);
             if (ModelState.IsValid)
             {
                 service.UpdateCatalogItem(catalogItem);
@@ -111,29 +106,28 @@ namespace eShopLegacyMVC.Controllers
         }
 
         // GET: Catalog/Delete/5
-        public ActionResult Delete(int? id)
+        public IActionResult Delete(int? id)
         {
-            _log.Info($"Now loading... /Catalog/Delete?id={id}");
+            _logger.LogInformation("Now loading... /Catalog/Delete?id={Id}", id);
             if (id == null)
             {
-                return new HttpStatusCodeResult(HttpStatusCode.BadRequest);
+                return BadRequest();
             }
             CatalogItem catalogItem = service.FindCatalogItem(id.Value);
             if (catalogItem == null)
             {
-                return HttpNotFound();
+                return NotFound();
             }
             AddUriPlaceHolder(catalogItem);
-
             return View(catalogItem);
         }
 
         // POST: Catalog/Delete/5
         [HttpPost, ActionName("Delete")]
         [ValidateAntiForgeryToken]
-        public ActionResult DeleteConfirmed(int id)
+        public IActionResult DeleteConfirmed(int id)
         {
-            _log.Info($"Now processing... /Catalog/DeleteConfirmed?id={id}");
+            _logger.LogInformation("Now processing... /Catalog/DeleteConfirmed?id={Id}", id);
             CatalogItem catalogItem = service.FindCatalogItem(id);
             service.RemoveCatalogItem(catalogItem);
             return RedirectToAction("Index");
@@ -141,7 +135,7 @@ namespace eShopLegacyMVC.Controllers
 
         protected override void Dispose(bool disposing)
         {
-            _log.Debug($"Now disposing");
+            _logger.LogDebug("Now disposing");
             if (disposing)
             {
                 service.Dispose();
@@ -159,7 +153,7 @@ namespace eShopLegacyMVC.Controllers
 
         private void AddUriPlaceHolder(CatalogItem item)
         {
-            item.PictureUri = this.Url.RouteUrl(PicController.GetPicRouteName, new { catalogItemId = item.Id }, this.Request.Url.Scheme);            
+            item.PictureUri = Url.RouteUrl(PicController.GetPicRouteName, new { catalogItemId = item.Id }, Request.Scheme);
         }
     }
 }
