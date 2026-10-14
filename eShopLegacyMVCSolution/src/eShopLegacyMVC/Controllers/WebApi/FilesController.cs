@@ -1,14 +1,14 @@
 ﻿using eShopLegacy.Utilities;
 using eShopLegacyMVC.Services;
+using Microsoft.AspNetCore.Mvc;
 using System;
 using System.Linq;
-using System.Net;
-using System.Net.Http;
-using System.Web.Http;
 
 namespace eShopLegacyMVC.Controllers.WebApi
 {
-    public class FilesController : ApiController
+    [ApiController]
+    [Route("api/[controller]")]
+    public class FilesController : ControllerBase
     {
         private ICatalogService _service;
 
@@ -18,7 +18,8 @@ namespace eShopLegacyMVC.Controllers.WebApi
         }
 
         // GET api/<controller>
-        public HttpResponseMessage Get()
+        [HttpGet]
+        public IActionResult Get()
         {
             var brands = _service.GetCatalogBrands()
                 .Select(b => new BrandDTO
@@ -27,12 +28,9 @@ namespace eShopLegacyMVC.Controllers.WebApi
                     Brand = b.Brand
                 }).ToList();
             var serializer = new Serializing();
-            var response = new HttpResponseMessage(HttpStatusCode.OK)
-            {
-                Content = new StreamContent(serializer.SerializeBinary(brands))
-            };
 
-            return response;
+            // Serializing now emits JSON (BinaryFormatter is removed from .NET 9+).
+            return File(serializer.SerializeBinary(brands), "application/json");
         }
 
         [Serializable]

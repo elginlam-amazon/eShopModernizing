@@ -1,0 +1,3477 @@
+# 📊 Executive Report: eShopLegacyMVC Solution Upgrade to .NET 10  
+  
+## 1. 🧭 Executive Summary  
+  
+- 🎯 **Scope:** 3 projects in `eShopLegacyMVCSolution` moved from .NET Framework 4.6.1/4.7.2 (and ASP.NET Core 2.2 on net461) to **net10.0**:  
+  - `eShopLegacy.Utilities` (class library)  
+  - `eShopPorted` (ASP.NET Core web app)  
+  - `src/eShopLegacyMVC` (ASP.NET MVC 5 + Web API 2 + EF6 web app)  
+- ✅ **Outcome:** every project builds with **0 errors and 0 warnings** in Debug and Release. The `eShopLegacyMVC.sln` solution build is also clean.  
+- 🔁 **How:**  
+  - Microsoft Upgrade Assistant upgraded the two simpler projects.  
+  - It crashed on `eShopLegacyMVC` because `Microsoft.WebApplication.targets` is not on Linux.  
+  - Kiro CLI then did the full migration of `eShopLegacyMVC` by hand: System.Web, MVC 5, Web API 2 and EF6 moved to ASP.NET Core MVC and EF Core 10. It also fixed the leftover issues in the other two projects.  
+- ⏱️ **Duration:** the run started at 13:47:50 UTC. The Kiro CLI session took about **9 minutes** (31.27 credits).  
+- 📦 **Footprint:** 145 files changed (+250 / −1,424 lines). 96 of them are static assets that were moved (renames).  
+- ⚠️ **Not verified at runtime:** the apps were not run against SQL Server, and the solution has no automated tests.  
+  
+## 2. 🏗️ Application Changes  
+  
+### 📚 eShopLegacy.Utilities  
+- 🎯 Multi-targets `net10.0;netstandard2.0`, so .NET Framework callers can still use it.  
+- 🔐 `BinaryFormatter` was replaced with `System.Text.Json`, because `BinaryFormatter` is removed in .NET 9+ and is insecure.  
+  
+### 🌐 eShopLegacyMVC (main legacy app)  
+- 🧱 **Project file:** the classic `.csproj` with `packages.config` became an SDK-style `Microsoft.NET.Sdk.Web` project.  
+- 🚀 **Startup:** `Global.asax` and `App_Start/*` (Bundle, Filter, Route and WebApi config) were replaced by a minimal-hosting `Program.cs`.  
+- ⚙️ **Config:** `Web.config` and its transforms were replaced by `appsettings.json` and `appsettings.Development.json`.  
+- 🗄️ **Data:** EF6 became EF Core 10 (SQL Server).  
+- 🧩 **DI:** Autofac stays the container (MVC5/WebApi2 integration → `Autofac.Extensions.DependencyInjection`).  
+- 🔌 **APIs:** Web API 2 `ApiController`s became ASP.NET Core `[ApiController]`s on the same routes.  
+- 🎨 **Static files:** `Content`, `Scripts`, `fonts`, `Pics`, `Images` and `favicon.ico` moved to `wwwroot`. `Images` was renamed to `images` because Linux paths are case-sensitive.  
+- 🧹 **Removed:** Application Insights (it had no key configured), the System.Web.Optimization bundles, `ApplicationInsights.config` and `Views/Web.config`.  
+  
+### 🔧 eShopPorted  
+- 🏠 **Hosting:** the obsolete `WebHost`/`UseMvc` setup became the generic Host with endpoint routing. `ConfigureContainer` now registers the Autofac module.  
+- 📦 **Packages:** the .NET Framework fallback packages (Autofac.Mvc5, WebGrease, Antlr, Microsoft.AspNet.*) are gone.  
+- 🖼️ **Bug fix:** `PicController` was still on `System.Web.Mvc` and its picture path was empty. It now uses ASP.NET Core and reads from `wwwroot/Pics`.  
+  
+## 3. 🛠️ Tools Used  
+  
+- 🟣 **.NET SDK 10.0.402:**  
+  - Builds and restores.  
+  - `dotnet nuget why` (vulnerability tracing).  
+  - `dotnet package search` (version selection).  
+- 🔄 **Microsoft .NET Upgrade Assistant 1.0.518.26217:** in-place framework upgrade.  
+  - `eShopLegacy.Utilities`: 10 steps succeeded, 1 skipped.  
+  - `eShopPorted`: 12 steps succeeded, 137 skipped.  
+  - `eShopLegacyMVC`: failed with `InvalidProjectFileException` (missing `WebApplication.targets`).  
+- 🤖 **Kiro CLI 2.14.2** with model **claude-opus-5.5**:  
+  - Fixed the remaining build errors on its own.  
+  - Did the full manual migration of `eShopLegacyMVC`.  
+  - Used the migration knowledge base: 00 Prebuild cleanup, 16 EF6→EF Core, 27 Build integrity, 28 BinaryFormatter, plus others.  
+- 🧠 **CodeKB (MCP):** mapped the pre-upgrade components (controllers, DbContext, initializer, Startup) before they were changed.  
+  
+## 4. 💻 Code Changes  
+  
+### 🗄️ Data access (EF6 → EF Core 10)  
+- `CatalogDBContext`: `DbModelBuilder`/`EntityTypeConfiguration` became `ModelBuilder`/`EntityTypeBuilder`.  
+- `HasRequired` became `HasOne().IsRequired()`, and the constructor now takes `DbContextOptions`.  
+- EF6 key behaviour is kept:  
+  - Brand and type Ids are identity columns, and client-set Ids are ignored.  
+  - Item Ids use `ValueGeneratedNever` (they come from the HiLo sequence).  
+  - Price is `HasPrecision(18,2)`.  
+- `CatalogDBInitializer`: the `CreateDatabaseIfNotExists` + `Seed` pair became `InitializeDatabase()`, which calls `EnsureCreated()` and seeds only when it created the database.  
+- `SqlQuery<long>` became `SqlQueryRaw<long>().AsEnumerable()`, and `ExecuteSqlCommand` became `ExecuteSqlRaw`.  
+- `HostingEnvironment`/`ConfigurationManager` became `IWebHostEnvironment`/`IConfiguration`.  
+- SQL script paths no longer use Windows backslashes.  
+  
+### 🚦 Startup and pipeline (`Program.cs`)  
+- 🧩 Autofac via `AutofacServiceProviderFactory`, plus `AddDbContext`.  
+- 🍪 `Session_Start` became session middleware (`AddSession`/`UseSession`) that sets `MachineName` and `SessionStartTime`.  
+- 📝 `Application_BeginRequest` became middleware that sets the log4net `LogicalThreadContext` properties (`ActivityIdHelper` and `WebRequestInfo` moved to `LoggingContext.cs`).  
+- 🌍 `<globalization en-US>` became `UseRequestLocalization`.  
+- 🚨 `HandleErrorAttribute` became `UseExceptionHandler("/Error")` with a new `ErrorController`, outside Development only.  
+  
+### 🎮 Controllers  
+- `System.Web.Mvc` → `Microsoft.AspNetCore.Mvc`:  
+  - `HttpStatusCodeResult` → `BadRequest()`  
+  - `HttpNotFound()` → `NotFound()`  
+  - `Bind(Include=…)` → `Bind("…")`  
+  - `Request.Url.Scheme` → `Request.Scheme`  
+  - `Server.MapPath` → `WebRootPath`  
+- Web API:  
+  - `IHttpActionResult`/`HttpResponseMessage` → `IActionResult`/`File()`  
+  - Routes are now attribute routes: `api/brands`, `api/brands/{id}`, `api/files`.  
+  - JSON keeps PascalCase property names so the API contract does not change.  
+- An unused `System.Runtime.Remoting.Messaging` import was removed.  
+  
+### 🖼️ Views  
+- ➕ Added `_ViewImports.cshtml` (tag helpers and namespaces).  
+- `@Scripts.Render`/`@Styles.Render` became `<environment>`-aware `<link>`/`<script>` tags: full files in Development, `.min` files with `asp-append-version` elsewhere.  
+- `HttpContext.Current.Session[...]` became `Context.Session.GetString(...)`.  
+- `Html.Partial` became `Html.PartialAsync`.  
+- 🐛 `ActionLink(text, action, null, attrs)` now uses named arguments. In ASP.NET Core a `null` third argument binds to the `controllerName` overload and produces the wrong URL. Fixed in both web apps.  
+  
+### 📦 Packages and security  
+- ⬆️ Autofac 9.3.4, Autofac.Extensions.DependencyInjection 11.0.2, log4net 3.5.0 (fixes GHSA-4f7c-pmjv-c25w) and EF Core 10.0.13.  
+- 🛡️ Pinned `System.Security.Cryptography.Pkcs` 10.0.13. This fixes NU1902/NU1903 (GHSA-2fmv-rv2c-59x7, GHSA-846f-f764-76mx) on the version that Microsoft.Data.SqlClient pulled in.  
+- 🧹 EF1003 (raw SQL built from strings) is suppressed with a written reason: the sequence names are private constants, not user input.  
+- 🧹 The NU1510 and NU1701 package warnings are gone.  
+  
+## 5. ⏳ Time Savings Estimate  
+  
+| Area | Manual estimate | Automated |  
+| --- | --- | --- |  
+| 🧱 Project file / SDK conversion (3 projects, including multi-targeting) | 2–3 h | ✅ |  
+| 🌐 System.Web, MVC 5 and Web API 2 → ASP.NET Core (5 controllers, 8 views, pipeline) | 6–10 h | ✅ |  
+| 🗄️ EF6 → EF Core (context, initializer, HiLo raw SQL) | 3–5 h | ✅ |  
+| ⚙️ Global.asax/Web.config → Program.cs/appsettings (session, logging, culture, errors) | 2–4 h | ✅ |  
+| 🔐 BinaryFormatter replacement and vulnerability remediation | 1–2 h | ✅ |  
+| 🧹 Fixing warnings to zero and Debug/Release verification | 1–2 h | ✅ |  
+| **Total** | **≈ 15–26 engineer-hours** | **≈ 10 minutes** |  
+  
+- 💡 That is roughly **2–3 engineer-days saved**, assuming one engineer who knows both frameworks. The manual figures are estimates and were not measured.  
+- 🧩 Upgrade Assistant could not handle the most complex project (`eShopLegacyMVC`), so most of the saving comes from Kiro CLI.  
+  
+## 6. 🔜 Next Steps  
+  
+### ✅ Validation  
+- 🧪 Run both apps against SQL Server and check:  
+  - Catalog list, paging and CRUD  
+  - `/items/{id}/pic`  
+  - `GET/DELETE /api/brands`  
+  - `GET /api/files`  
+  - The session footer  
+- 🗄️ Confirm that `EnsureCreated` and seeding work on an empty database, and that an existing EF6-created database is detected and left alone.  
+- 🌍 Check that prices are parsed and shown correctly with en-US formatting.  
+- 📝 Confirm that log4net writes `logFiles/myapp.log` on Linux and on Windows.  
+  
+### ⚠️ Behaviour changes to review  
+- 🔄 `api/files` now returns JSON, not BinaryFormatter bytes. Any consumer that reads the old format must change.  
+- 🚀 The database initializer now runs at startup instead of on first use, so the app will not start if the database can't be reached.  
+- 📡 Web API no longer offers XML responses (JSON only). `GET /api` now returns JSON, where MVC 5 used to block it.  
+- 📉 Application Insights was removed. Re-add `Microsoft.ApplicationInsights.AspNetCore`/Azure Monitor with a connection string if you need telemetry.  
+  
+### 🚀 Improvements  
+- 🧪 Add a test project (xUnit) for the services, the controllers and the `Serializing` round trip.  
+- 🔐 Use per-environment connection strings via `ConnectionStrings__CatalogDBContext`. Microsoft.Data.SqlClient defaults to `Encrypt=True`, so servers other than localdb may need encryption settings.  
+- 🗃️ Replace `EnsureCreated` with EF Core migrations.  
+- 🖥️ Use a distributed cache for session state if you run more than one instance.  
+- 📝 Consider moving from log4net to `Microsoft.Extensions.Logging`. Separately, `log4Net.xml` references `%property{activity}` while the code sets `activityid`; this mismatch existed before the upgrade.  
+- 🐛 Fix the existing eShopPorted issues:  
+  - `UseExceptionHandler("/Home/Error")` points to a controller that doesn't exist.  
+  - `~/images` vs `wwwroot/Images` casing breaks on Linux.  
+  - The EF Core 2.2 migrations should be regenerated.  
+- 🐳 Containerize for Linux (`mcr.microsoft.com/dotnet/aspnet:10.0`, KB doc 19).  
+
+## Kiro credit usage
+
+💳 Kiro CLI credits used: 71.31  
+
+## Codebase index refresh
+
+- Outcome: Index current
+- Reason: Index current at 63bc9ec4414d7e281dc9f9d7bdcf70030950457d.
+- Previously indexed commit: 63bc9ec4414d7e281dc9f9d7bdcf70030950457d
+- Source commit at transformation start: 63bc9ec4414d7e281dc9f9d7bdcf70030950457d
+- Duration: 0.0s
+
+## Requirements register refresh
+
+- Outcome: Timed out
+- Reason: Register refresh exceeded 300000ms.
+- Duration: 300.2s
+
+> The requirements register was not refreshed for this transformation, so feature parity was checked against the **previous** register content. The transformation proceeded regardless.
+
+## Feature Parity Verification
+
+- Requirements evaluated: 465
+- Satisfied: 383
+- Regressions: 0
+- Unverified: 82
+- Behaviour-judged (changed requirements): 54
+
+### Verdict coverage
+
+Of 465 requirement(s): 0 test-backed, 54 behaviour-judged, 329 unchanged-by-construction, 82 unverified.
+
+> **Partial parity report.** The behaviour judge did not reach every changed requirement. 54 of 134 changed requirement(s) were judged (verdicts kept from 18 of 45 judge chunk(s)); the rest are recorded as unverified.
+
+### Unverified
+
+- **FR-handles-logging-for-i-ca-c1135095**: WHEN a caller invokes an operation of ICatalogService, the ICatalogService SHALL provide the operations CatalogItem, GetCatalogBrands, GetCatalogItemsPaginated, GetCatalogTypes and CreateCatalogItem (+2 more).
+  - Acceptance criteria:
+    - AC1: The ICatalogService SHALL expose the operations CatalogItem, GetCatalogBrands, GetCatalogItemsPaginated, GetCatalogTypes and CreateCatalogItem (+2 more).
+  - Verdict: unverified (evidence: no-evidence)
+  - Reasoning: The implementing code changed and no covering test maps to this requirement.
+  - Caveat: The behaviour judge produced no ruling (unreached, over deadline, or unavailable), so parity could not be established either way.
+- **FR-provide-catalog-brand-ca-d6ed4bd7**: WHEN a caller invokes an operation of CatalogBrand, the CatalogBrand SHALL hold the Id and Brand values.
+  - Acceptance criteria:
+    - AC1: The CatalogBrand SHALL expose the properties Id and Brand.
+  - Verdict: unverified (evidence: no-evidence)
+  - Reasoning: The implementing code changed and no covering test maps to this requirement.
+  - Caveat: The behaviour judge produced no ruling (unreached, over deadline, or unavailable), so parity could not be established either way.
+- **FR-provide-catalog-type-cap-edec60e7**: WHEN a caller invokes an operation of CatalogType, the CatalogType SHALL hold the Id and Type values.
+  - Acceptance criteria:
+    - AC1: The CatalogType SHALL expose the properties Id and Type.
+  - Verdict: unverified (evidence: no-evidence)
+  - Reasoning: The implementing code changed and no covering test maps to this requirement.
+  - Caveat: The behaviour judge produced no ruling (unreached, over deadline, or unavailable), so parity could not be established either way.
+- **FR-get-headers-e4f5f7b9**: WHEN a caller invokes GetHeaders, the CatalogDBInitializer SHALL return the headers for the given csvfile, required headers and optional headers.
+  - Acceptance criteria:
+    - AC1: IF csvheaders.Count() < requiredHeaders.Count(), THEN the CatalogDBInitializer SHALL throw Exception.
+    - AC2: IF csvheaders.Count() > (requiredHeaders.Count() + optionalHeaders.Count()), THEN the CatalogDBInitializer SHALL throw Exception.
+    - AC3: IF !csvheaders.Contains(requiredHeader.ToLowerInvariant()), THEN the CatalogDBInitializer SHALL throw Exception.
+    - AC4: WHEN GetHeaders completes normally, the CatalogDBInitializer SHALL return csvheaders.
+    - AC5: WHEN GetHeaders is invoked, the CatalogDBInitializer SHALL accept csvfile of type string, requiredHeaders of type string[] and optionalHeaders of type string[] defaulting to null.
+  - Verdict: unverified (evidence: no-evidence)
+  - Reasoning: The implementing code changed and no covering test maps to this requirement.
+  - Caveat: The behaviour judge produced no ruling (unreached, over deadline, or unavailable), so parity could not be established either way.
+- **FR-handles-retrieval-for-ca-af17f14b**: WHEN a caller invokes Callbacks, the jQuery SHALL perform Callbacks.
+  - Acceptance criteria:
+    - AC1: WHEN Callbacks completes normally, the jQuery SHALL return _object.
+    - AC2: The jQuery SHALL provide Callbacks on the class itself, not on its instances.
+    - AC3: WHEN Callbacks is invoked, the jQuery SHALL accept flags as input.
+  - Verdict: unverified (evidence: no-evidence)
+  - Reasoning: The implementing code changed and no covering test maps to this requirement.
+  - Caveat: The behaviour judge produced no ruling (unreached, over deadline, or unavailable), so parity could not be established either way.
+- **FR-handles-retrieval-for-de-b93a15dc**: WHEN a caller invokes Deferred, the jQuery SHALL perform Deferred.
+  - Acceptance criteria:
+    - AC1: WHEN Deferred completes normally, the jQuery SHALL return _object.
+    - AC2: The jQuery SHALL provide Deferred on the class itself, not on its instances.
+    - AC3: WHEN Deferred is invoked, the jQuery SHALL accept func as input.
+  - Verdict: unverified (evidence: no-evidence)
+  - Reasoning: The implementing code changed and no covering test maps to this requirement.
+  - Caveat: The behaviour judge produced no ruling (unreached, over deadline, or unavailable), so parity could not be established either way.
+- **FR-load-retrieval-e694f24f**: WHEN a caller invokes Load, the ApplicationModule SHALL return the application module for the given builder.
+  - Acceptance criteria:
+    - AC1: WHEN Load is invoked, the ApplicationModule SHALL accept builder of type ContainerBuilder.
+  - Verdict: unverified (evidence: no-evidence)
+  - Reasoning: The implementing code changed and no covering test maps to this requirement.
+  - Caveat: The behaviour judge produced no ruling (unreached, over deadline, or unavailable), so parity could not be established either way.
+- **FR-get-preconfigured-catalo-78dd2d8e**: WHEN a caller invokes GetPreconfiguredCatalogBrands, the PreconfiguredData SHALL return all preconfigured catalog brands.
+  - Acceptance criteria:
+    - AC1: WHEN GetPreconfiguredCatalogBrands runs, the PreconfiguredData SHALL call CatalogBrand.
+    - AC2: WHEN GetPreconfiguredCatalogBrands completes normally, the PreconfiguredData SHALL return a value of type IEnumerable&lt;CatalogBrand>.
+  - Verdict: unverified (evidence: no-evidence)
+  - Reasoning: The implementing code changed and no covering test maps to this requirement.
+  - Caveat: The behaviour judge produced no ruling (unreached, over deadline, or unavailable), so parity could not be established either way.
+- **FR-get-preconfigured-catalo-f429fef8**: WHEN a caller invokes GetPreconfiguredCatalogItems, the PreconfiguredData SHALL return all preconfigured catalog items.
+  - Acceptance criteria:
+    - AC1: WHEN GetPreconfiguredCatalogItems completes normally, the PreconfiguredData SHALL return a value of type List&lt;CatalogItem>.
+  - Verdict: unverified (evidence: no-evidence)
+  - Reasoning: The implementing code changed and no covering test maps to this requirement.
+  - Caveat: The behaviour judge produced no ruling (unreached, over deadline, or unavailable), so parity could not be established either way.
+- **FR-get-preconfigured-catalo-dd87df1f**: WHEN a caller invokes GetPreconfiguredCatalogTypes, the PreconfiguredData SHALL return all preconfigured catalog types.
+  - Acceptance criteria:
+    - AC1: WHEN GetPreconfiguredCatalogTypes runs, the PreconfiguredData SHALL call CatalogType.
+    - AC2: WHEN GetPreconfiguredCatalogTypes completes normally, the PreconfiguredData SHALL return a value of type IEnumerable&lt;CatalogType>.
+  - Verdict: unverified (evidence: no-evidence)
+  - Reasoning: The implementing code changed and no covering test maps to this requirement.
+  - Caveat: The behaviour judge produced no ruling (unreached, over deadline, or unavailable), so parity could not be established either way.
+- **FR-handles-logging-for-cata-a1e2dcfd**: WHEN a caller creates a CatalogService, the CatalogService SHALL initialize the CatalogService with the given db.
+  - Acceptance criteria:
+    - AC1: WHEN CatalogService is constructed, the CatalogService SHALL store db in this.db.
+    - AC2: WHEN CatalogService is constructed, the CatalogService SHALL accept db of type CatalogDBContext.
+  - Verdict: unverified (evidence: no-evidence)
+  - Reasoning: The implementing code changed and no covering test maps to this requirement.
+  - Caveat: The behaviour judge produced no ruling (unreached, over deadline, or unavailable), so parity could not be established either way.
+- **FR-handles-retrieval-for-br-0564dcec**: WHEN eShopPorted.Controllers.FilesController.BrandDTO.Brand is used, the BrandDTO SHALL expose the brand value as a string.
+  - Acceptance criteria:
+    - AC1: The BrandDTO SHALL expose Brand as a string property with public get and set accessors.
+  - Verdict: unverified (evidence: no-evidence)
+  - Reasoning: The implementing code changed and no covering test maps to this requirement.
+  - Caveat: The behaviour judge produced no ruling (unreached, over deadline, or unavailable), so parity could not be established either way.
+- **FR-handles-retrieval-for-ca-25318f28**: WHEN eShopPorted.Models.CatalogDBContext.CatalogBrands is used, the CatalogDBContext SHALL expose the catalog brands value as a DbSet&lt;CatalogBrand>.
+  - Acceptance criteria:
+    - AC1: The CatalogDBContext SHALL expose CatalogBrands as a DbSet&lt;CatalogBrand> property with public get and set accessors.
+  - Verdict: unverified (evidence: no-evidence)
+  - Reasoning: The implementing code changed and no covering test maps to this requirement.
+  - Caveat: The behaviour judge produced no ruling (unreached, over deadline, or unavailable), so parity could not be established either way.
+- **FR-handles-retrieval-for-ca-b57a5653**: WHEN eShopPorted.Models.CatalogDBContext.CatalogItems is used, the CatalogDBContext SHALL expose the catalog items value as a DbSet&lt;CatalogItem>.
+  - Acceptance criteria:
+    - AC1: The CatalogDBContext SHALL expose CatalogItems as a DbSet&lt;CatalogItem> property with public get and set accessors.
+  - Verdict: unverified (evidence: no-evidence)
+  - Reasoning: The implementing code changed and no covering test maps to this requirement.
+  - Caveat: The behaviour judge produced no ruling (unreached, over deadline, or unavailable), so parity could not be established either way.
+- **FR-handles-retrieval-for-ca-36d2ae92**: WHEN eShopPorted.Models.CatalogDBContext.CatalogTypes is used, the CatalogDBContext SHALL expose the catalog types value as a DbSet&lt;CatalogType>.
+  - Acceptance criteria:
+    - AC1: The CatalogDBContext SHALL expose CatalogTypes as a DbSet&lt;CatalogType> property with public get and set accessors.
+  - Verdict: unverified (evidence: no-evidence)
+  - Reasoning: The implementing code changed and no covering test maps to this requirement.
+  - Caveat: The behaviour judge produced no ruling (unreached, over deadline, or unavailable), so parity could not be established either way.
+- **FR-provide-catalog-service-b491a825**: WHEN a caller invokes an operation of CatalogService, the CatalogService SHALL provide the operations GetCatalogItemsPaginated, CatalogItem, GetCatalogTypes, GetCatalogBrands and CreateCatalogItem (+3 more).
+  - Acceptance criteria:
+    - AC1: The CatalogService SHALL implement ICatalogService.
+    - AC2: The CatalogService SHALL expose the operations GetCatalogItemsPaginated, CatalogItem, GetCatalogTypes, GetCatalogBrands and CreateCatalogItem (+3 more).
+  - Verdict: unverified (evidence: no-evidence)
+  - Reasoning: The implementing code changed and no covering test maps to this requirement.
+  - Caveat: The behaviour judge produced no ruling (unreached, over deadline, or unavailable), so parity could not be established either way.
+- **FR-provide-preconfigured-da-26ece5d5**: WHEN a caller invokes an operation of PreconfiguredData, the PreconfiguredData SHALL provide the operations GetPreconfiguredCatalogItems, GetPreconfiguredCatalogBrands and GetPreconfiguredCatalogTypes.
+  - Acceptance criteria:
+    - AC1: The PreconfiguredData SHALL expose the operations GetPreconfiguredCatalogItems, GetPreconfiguredCatalogBrands and GetPreconfiguredCatalogTypes.
+  - Verdict: unverified (evidence: no-evidence)
+  - Reasoning: The implementing code changed and no covering test maps to this requirement.
+  - Caveat: The behaviour judge produced no ruling (unreached, over deadline, or unavailable), so parity could not be established either way.
+- **FR-add-catalog-brands-a489d9de**: WHEN a caller invokes AddCatalogBrands, the CatalogDBInitializer SHALL save the changes.
+  - Acceptance criteria:
+    - AC1: WHEN AddCatalogBrands runs, the CatalogDBInitializer SHALL add brand to context.CatalogBrands and save the changes via context.SaveChanges().
+    - AC2: WHEN AddCatalogBrands runs, the CatalogDBInitializer SHALL call GetCatalogBrandsFromFile, GetPreconfiguredCatalogBrands and GetSequenceIdFromSelectedDBSequence.
+    - AC3: WHEN AddCatalogBrands is invoked, the CatalogDBInitializer SHALL accept context of type CatalogDBContext.
+  - Verdict: unverified (evidence: no-evidence)
+  - Reasoning: The implementing code changed and no covering test maps to this requirement.
+  - Caveat: The behaviour judge produced no ruling (unreached, over deadline, or unavailable), so parity could not be established either way.
+- **FR-add-catalog-items-484d6f3e**: WHEN a caller invokes AddCatalogItems, the CatalogDBInitializer SHALL save the changes.
+  - Acceptance criteria:
+    - AC1: WHEN AddCatalogItems runs, the CatalogDBInitializer SHALL add item to context.CatalogItems and save the changes via context.SaveChanges().
+    - AC2: WHEN AddCatalogItems runs, the CatalogDBInitializer SHALL call GetCatalogItemsFromFile, GetPreconfiguredCatalogItems and GetNextSequenceValue.
+    - AC3: WHEN AddCatalogItems is invoked, the CatalogDBInitializer SHALL accept context of type CatalogDBContext.
+  - Verdict: unverified (evidence: no-evidence)
+  - Reasoning: The implementing code changed and no covering test maps to this requirement.
+  - Caveat: The behaviour judge produced no ruling (unreached, over deadline, or unavailable), so parity could not be established either way.
+- **FR-add-catalog-types-3c93836f**: WHEN a caller invokes AddCatalogTypes, the CatalogDBInitializer SHALL save the changes.
+  - Acceptance criteria:
+    - AC1: WHEN AddCatalogTypes runs, the CatalogDBInitializer SHALL add type to context.CatalogTypes and save the changes via context.SaveChanges().
+    - AC2: WHEN AddCatalogTypes runs, the CatalogDBInitializer SHALL call GetCatalogTypesFromFile, GetPreconfiguredCatalogTypes and GetSequenceIdFromSelectedDBSequence.
+    - AC3: WHEN AddCatalogTypes is invoked, the CatalogDBInitializer SHALL accept context of type CatalogDBContext.
+  - Verdict: unverified (evidence: no-evidence)
+  - Reasoning: The implementing code changed and no covering test maps to this requirement.
+  - Caveat: The behaviour judge produced no ruling (unreached, over deadline, or unavailable), so parity could not be established either way.
+- **FR-provide-application-modu-9a272eaa**: WHEN a caller invokes an operation of ApplicationModule, the ApplicationModule SHALL load the application module.
+  - Acceptance criteria:
+    - AC1: The ApplicationModule SHALL expose the operation Load.
+  - Verdict: unverified (evidence: no-evidence)
+  - Reasoning: The implementing code changed and no covering test maps to this requirement.
+  - Caveat: The behaviour judge produced no ruling (unreached, over deadline, or unavailable), so parity could not be established either way.
+- **FR-provide-catalog-db-initi-d2a51c8e**: WHEN a caller invokes an operation of CatalogDBInitializer, the CatalogDBInitializer SHALL provide the operations Seed, AddCatalogTypes, AddCatalogBrands, AddCatalogItems, GetCatalogTypesFromFile, and 9 additional related seeding operations to initialize the catalog database.
+  - Acceptance criteria:
+    - AC1: The CatalogDBInitializer SHALL expose the operations Seed, AddCatalogTypes, AddCatalogBrands, AddCatalogItems and GetCatalogTypesFromFile (+9 more).
+  - Verdict: unverified (evidence: no-evidence)
+  - Reasoning: The implementing code changed and no covering test maps to this requirement.
+  - Caveat: The behaviour judge produced no ruling (unreached, over deadline, or unavailable), so parity could not be established either way.
+- **FR-get-next-sequence-value-29cb63c8**: WHEN a caller invokes GetNextSequenceValue, the CatalogItemHiLoGenerator SHALL return the next sequence value for the given database context.
+  - Acceptance criteria:
+    - AC1: IF remainningLoIds == 0, THEN the CatalogItemHiLoGenerator SHALL return sequenceId.
+    - AC2: IF remainningLoIds != 0, THEN the CatalogItemHiLoGenerator SHALL return ++sequenceId.
+    - AC3: WHEN GetNextSequenceValue completes normally, the CatalogItemHiLoGenerator SHALL return a value of type int.
+    - AC4: WHEN GetNextSequenceValue is invoked, the CatalogItemHiLoGenerator SHALL accept db of type CatalogDBContext.
+  - Verdict: unverified (evidence: no-evidence)
+  - Reasoning: The implementing code changed and no covering test maps to this requirement.
+  - Caveat: The behaviour judge produced no ruling (unreached, over deadline, or unavailable), so parity could not be established either way.
+- **FR-get-retrieval-cbba61f5**: WHEN a caller invokes Get, the BrandsController SHALL return all catalog brands.
+  - Acceptance criteria:
+    - AC1: WHEN Get runs, the BrandsController SHALL call GetCatalogBrands.
+    - AC2: WHEN Get completes normally, the BrandsController SHALL return brands.
+  - Verdict: unverified (evidence: no-evidence)
+  - Reasoning: The implementing code changed and no covering test maps to this requirement.
+  - Caveat: The behaviour judge produced no ruling (unreached, over deadline, or unavailable), so parity could not be established either way.
+- **FR-handles-calculation-for-4316397c**: WHEN a caller invokes clockwise, the popper module SHALL compute and return the next placement in clockwise order.
+  - Acceptance criteria:
+    - AC1: WHEN clockwise runs, the popper module SHALL call indexOf.
+    - AC2: WHEN clockwise completes normally, the popper module SHALL return counter ? arr.reverse() : arr.
+    - AC3: WHEN clockwise is invoked, the popper module SHALL accept placement and counter defaulting to false as input.
+  - Verdict: unverified (evidence: no-evidence)
+  - Reasoning: The implementing code changed and no covering test maps to this requirement.
+  - Caveat: The behaviour judge produced no ruling (unreached, over deadline, or unavailable), so parity could not be established either way.
+- **FR-handles-configuration-fo-9cdb79d8**: WHEN a caller creates a Popper, the Popper SHALL initialize its internal state with the given reference element, popper element, and options.
+  - Acceptance criteria:
+    - AC1: WHEN Popper is constructed, the Popper SHALL set this.scheduleUpdate to () => requestAnimationFrame(this.update), set this.update to debounce(this.update.bind(this)) and set this.options to _extends({}, Popper.Defaults, options).
+    - AC2: WHEN Popper is constructed, the Popper SHALL set this.state to { isDestroyed: false, isCreated: false, scrollParents: [] }, set this.reference to reference && reference.jquery ? reference[0] : reference and set this.popper to popper && popper.jquery ? popper[0] : popper.
+    - AC3: WHEN Popper is constructed, the Popper SHALL call forEach, isFunction, update and enableEventListeners.
+    - AC4: WHEN Popper is constructed, the Popper SHALL accept reference, popper and options defaulting to {} as input.
+  - Verdict: unverified (evidence: no-evidence)
+  - Reasoning: The implementing code changed and no covering test maps to this requirement.
+  - Caveat: The behaviour judge produced no ruling (unreached, over deadline, or unavailable), so parity could not be established either way.
+- **FR-handles-logging-for-cata-76b74c45**: WHEN a caller creates a CatalogController, the CatalogController SHALL initialize its internal state with the given catalog service.
+  - Acceptance criteria:
+    - AC1: WHEN CatalogController is constructed, the CatalogController SHALL store service in this.service.
+    - AC2: WHEN CatalogController is constructed, the CatalogController SHALL accept service of type ICatalogService.
+  - Verdict: unverified (evidence: no-evidence)
+  - Reasoning: The implementing code changed and no covering test maps to this requirement.
+  - Caveat: The behaviour judge produced no ruling (unreached, over deadline, or unavailable), so parity could not be established either way.
+- **FR-handles-retrieval-for-ty-eb9fbe79**: WHEN eShopPorted.Models.CatalogType.Type is used, the CatalogType SHALL expose the type value as a string.
+  - Acceptance criteria:
+    - AC1: The CatalogType SHALL expose Type as a string property with public get and set accessors.
+  - Verdict: unverified (evidence: no-evidence)
+  - Reasoning: The implementing code changed and no covering test maps to this requirement.
+  - Caveat: The behaviour judge produced no ruling (unreached, over deadline, or unavailable), so parity could not be established either way.
+- **FR-handles-validation-for-c-3321f3fe**: WHEN a caller invokes classCallCheck, the popper module SHALL verify that the function is being invoked as a constructor and throw an error if it is not.
+  - Acceptance criteria:
+    - AC1: IF !(instance instanceof Constructor), THEN the popper module SHALL throw TypeError with the message "Cannot call a class as a function".
+    - AC2: WHEN function completes normally, the popper module SHALL return a value of type var classCallCheck =.
+    - AC3: WHEN function is invoked, the popper module SHALL accept instance and Constructor as input.
+  - Verdict: unverified (evidence: no-evidence)
+  - Reasoning: The implementing code changed and no covering test maps to this requirement.
+  - Caveat: The behaviour judge produced no ruling (unreached, over deadline, or unavailable), so parity could not be established either way.
+- **FR-provide-catalog-controll-d4ff124a**: WHEN a caller invokes an operation of CatalogController, the CatalogController SHALL provide the operations ActionResult, Dispose, ChangeUriPlaceholder and AddUriPlaceHolder.
+  - Acceptance criteria:
+    - AC1: The CatalogController SHALL expose the operations ActionResult, Dispose, ChangeUriPlaceholder and AddUriPlaceHolder.
+  - Verdict: unverified (evidence: no-evidence)
+  - Reasoning: The implementing code changed and no covering test maps to this requirement.
+  - Caveat: The behaviour judge produced no ruling (unreached, over deadline, or unavailable), so parity could not be established either way.
+- **FR-provide-catalog-db-conte-197186c8**: WHEN a caller invokes an operation of CatalogDBContext, the CatalogDBContext SHALL configure the entity model mappings via OnModelCreating.
+  - Acceptance criteria:
+    - AC1: The CatalogDBContext SHALL expose the operation OnModelCreating.
+    - AC2: The CatalogDBContext SHALL expose the properties CatalogItems, CatalogBrands and CatalogTypes.
+  - Verdict: unverified (evidence: no-evidence)
+  - Reasoning: The implementing code changed and no covering test maps to this requirement.
+  - Caveat: The behaviour judge produced no ruling (unreached, over deadline, or unavailable), so parity could not be established either way.
+- **FR-provide-catalog-item-hi-6fb6c422**: WHEN a caller invokes an operation of CatalogItemHiLoGenerator, the CatalogItemHiLoGenerator SHALL provide the operation GetNextSequenceValue.
+  - Acceptance criteria:
+    - AC1: The CatalogItemHiLoGenerator SHALL expose the operation GetNextSequenceValue.
+  - Verdict: unverified (evidence: no-evidence)
+  - Reasoning: The implementing code changed and no covering test maps to this requirement.
+  - Caveat: The behaviour judge produced no ruling (unreached, over deadline, or unavailable), so parity could not be established either way.
+- **FR-provide-startup-capabili-5450250f**: WHEN a caller invokes an operation of Startup, the Startup SHALL provide the IServiceProvider configuration operation and the Configure operation to set up the application pipeline.
+  - Acceptance criteria:
+    - AC1: The Startup SHALL expose the operations IServiceProvider and Configure.
+    - AC2: The Startup SHALL expose the properties StartTime and Configuration.
+  - Verdict: unverified (evidence: no-evidence)
+  - Reasoning: The implementing code changed and no covering test maps to this requirement.
+  - Caveat: The behaviour judge produced no ruling (unreached, over deadline, or unavailable), so parity could not be established either way.
+- **FR-add-catalog-item-picture-feaffd80**: WHEN a caller invokes AddCatalogItemPictures, the CatalogDBInitializer SHALL persist the catalog item picture records to the database.
+  - Acceptance criteria:
+    - AC1: IF !useCustomizationData, THEN the CatalogDBInitializer SHALL stop without further processing.
+    - AC2: WHEN AddCatalogItemPictures runs, the CatalogDBInitializer SHALL call ToString.
+  - Verdict: unverified (evidence: no-evidence)
+  - Reasoning: The implementing code changed and no covering test maps to this requirement.
+  - Caveat: The behaviour judge produced no ruling (unreached, over deadline, or unavailable), so parity could not be established either way.
+- **FR-get-catalog-brands-from-1f8fc9c2**: WHEN a caller invokes GetCatalogBrandsFromFile, the CatalogDBInitializer SHALL return the catalog brands from the file.
+  - Acceptance criteria:
+    - AC1: IF !File.Exists(csvFileCatalogBrands), THEN the CatalogDBInitializer SHALL return PreconfiguredData.GetPreconfiguredCatalogBrands().
+    - AC2: WHEN GetCatalogBrandsFromFile runs, the CatalogDBInitializer SHALL call GetPreconfiguredCatalogBrands and GetHeaders.
+    - AC3: WHEN GetCatalogBrandsFromFile completes normally, the CatalogDBInitializer SHALL return File.ReadAllLines(csvFileCatalogBrands) .Skip(1) .Select(x => CreateCatalogBrand(x)) .Where(x => x != null).
+  - Verdict: unverified (evidence: no-evidence)
+  - Reasoning: The implementing code changed and no covering test maps to this requirement.
+  - Caveat: The behaviour judge produced no ruling (unreached, over deadline, or unavailable), so parity could not be established either way.
+- **FR-get-catalog-items-from-f-86091294**: WHEN a caller invokes GetCatalogItemsFromFile, the CatalogDBInitializer SHALL return the catalog items from the file.
+  - Acceptance criteria:
+    - AC1: IF !File.Exists(csvFileCatalogItems), THEN the CatalogDBInitializer SHALL return PreconfiguredData.GetPreconfiguredCatalogItems().
+    - AC2: WHEN GetCatalogItemsFromFile runs, the CatalogDBInitializer SHALL call GetPreconfiguredCatalogItems, GetHeaders and CreateCatalogItem.
+    - AC3: WHEN GetCatalogItemsFromFile completes normally, the CatalogDBInitializer SHALL return a value of type IEnumerable&lt;CatalogItem>.
+    - AC4: WHEN GetCatalogItemsFromFile is invoked, the CatalogDBInitializer SHALL accept context of type CatalogDBContext.
+  - Verdict: unverified (evidence: no-evidence)
+  - Reasoning: The implementing code changed and no covering test maps to this requirement.
+  - Caveat: The behaviour judge produced no ruling (unreached, over deadline, or unavailable), so parity could not be established either way.
+- **FR-get-catalog-types-from-f-320d3ce7**: WHEN a caller invokes GetCatalogTypesFromFile, the CatalogDBInitializer SHALL return the catalog types from the file.
+  - Acceptance criteria:
+    - AC1: IF !File.Exists(csvFileCatalogTypes), THEN the CatalogDBInitializer SHALL return PreconfiguredData.GetPreconfiguredCatalogTypes().
+    - AC2: WHEN GetCatalogTypesFromFile runs, the CatalogDBInitializer SHALL call GetPreconfiguredCatalogTypes and GetHeaders.
+    - AC3: WHEN GetCatalogTypesFromFile completes normally, the CatalogDBInitializer SHALL return File.ReadAllLines(csvFileCatalogTypes) .Skip(1) .Select(x => CreateCatalogType(x)) .Where(x => x != null).
+  - Verdict: unverified (evidence: no-evidence)
+  - Reasoning: The implementing code changed and no covering test maps to this requirement.
+  - Caveat: The behaviour judge produced no ruling (unreached, over deadline, or unavailable), so parity could not be established either way.
+- **FR-get-sequence-id-from-sel-7439316d**: WHEN a caller invokes GetSequenceIdFromSelectedDBSequence, the CatalogDBInitializer SHALL return the sequence id from the selected DB sequence.
+  - Acceptance criteria:
+    - AC1: WHEN GetSequenceIdFromSelectedDBSequence completes normally, the CatalogDBInitializer SHALL return sequenceId.
+    - AC2: WHEN GetSequenceIdFromSelectedDBSequence is invoked, the CatalogDBInitializer SHALL accept context of type CatalogDBContext and dBSequenceName of type string.
+  - Verdict: unverified (evidence: no-evidence)
+  - Reasoning: The implementing code changed and no covering test maps to this requirement.
+  - Caveat: The behaviour judge produced no ruling (unreached, over deadline, or unavailable), so parity could not be established either way.
+- **FR-handles-communication-fo-22a96425**: WHEN a caller invokes Application_BeginRequest, the MvcApplication SHALL execute the application's begin-request initialization logic for the incoming HTTP request.
+  - Acceptance criteria:
+    - AC1: WHEN Application_BeginRequest is invoked, the MvcApplication SHALL accept sender of type object and e of type EventArgs.
+  - Verdict: unverified (evidence: no-evidence)
+  - Reasoning: The implementing code changed and no covering test maps to this requirement.
+  - Caveat: The behaviour judge produced no ruling (unreached, over deadline, or unavailable), so parity could not be established either way.
+- **FR-handles-communication-fo-08c2c015**: WHEN a caller invokes Session_Start, the MvcApplication SHALL initialize session state for the new user session.
+  - Acceptance criteria:
+    - AC1: WHEN Session_Start is invoked, the MvcApplication SHALL accept sender of type Object and e of type EventArgs.
+  - Verdict: unverified (evidence: no-evidence)
+  - Reasoning: The implementing code changed and no covering test maps to this requirement.
+  - Caveat: The behaviour judge produced no ruling (unreached, over deadline, or unavailable), so parity could not be established either way.
+- **FR-handles-configuration-fo-544f97c9**: WHEN a caller invokes ConfigureCatalogBrand, the CatalogDBContext SHALL perform ConfigureCatalogBrand.
+  - Acceptance criteria:
+    - AC1: WHEN ConfigureCatalogBrand is invoked, the CatalogDBContext SHALL accept builder of type EntityTypeConfiguration&lt;CatalogBrand>.
+  - Verdict: unverified (evidence: no-evidence)
+  - Reasoning: The implementing code changed and no covering test maps to this requirement.
+  - Caveat: The behaviour judge produced no ruling (unreached, over deadline, or unavailable), so parity could not be established either way.
+- **FR-handles-configuration-fo-91a35bde**: WHEN a caller invokes ConfigureCatalogItem, the CatalogDBContext SHALL perform ConfigureCatalogItem.
+  - Acceptance criteria:
+    - AC1: WHEN ConfigureCatalogItem is invoked, the CatalogDBContext SHALL accept builder of type EntityTypeConfiguration&lt;CatalogItem>.
+  - Verdict: unverified (evidence: no-evidence)
+  - Reasoning: The implementing code changed and no covering test maps to this requirement.
+  - Caveat: The behaviour judge produced no ruling (unreached, over deadline, or unavailable), so parity could not be established either way.
+- **FR-handles-configuration-fo-453e87ff**: WHEN a caller invokes ConfigureCatalogType, the CatalogDBContext SHALL perform ConfigureCatalogType.
+  - Acceptance criteria:
+    - AC1: WHEN ConfigureCatalogType is invoked, the CatalogDBContext SHALL accept builder of type EntityTypeConfiguration&lt;CatalogType>.
+  - Verdict: unverified (evidence: no-evidence)
+  - Reasoning: The implementing code changed and no covering test maps to this requirement.
+  - Caveat: The behaviour judge produced no ruling (unreached, over deadline, or unavailable), so parity could not be established either way.
+- **FR-handles-configuration-fo-9b31f60a**: WHEN a caller invokes Configure, the Startup SHALL perform Configure.
+  - Acceptance criteria:
+    - AC1: WHEN Configure is invoked, the Startup SHALL accept app of type IApplicationBuilder and env of type IHostingEnvironment.
+  - Verdict: unverified (evidence: no-evidence)
+  - Reasoning: The implementing code changed and no covering test maps to this requirement.
+  - Caveat: The behaviour judge produced no ruling (unreached, over deadline, or unavailable), so parity could not be established either way.
+- **FR-handles-logging-for-cata-608af02a**: WHEN a caller creates a CatalogDBInitializer, the CatalogDBInitializer SHALL initialize the CatalogDBInitializer with the given index generator.
+  - Acceptance criteria:
+    - AC1: WHEN CatalogDBInitializer is constructed, the CatalogDBInitializer SHALL store indexGenerator in this.indexGenerator.
+    - AC2: WHEN CatalogDBInitializer is constructed, the CatalogDBInitializer SHALL accept indexGenerator of type CatalogItemHiLoGenerator.
+  - Verdict: unverified (evidence: no-evidence)
+  - Reasoning: The implementing code changed and no covering test maps to this requirement.
+  - Caveat: The behaviour judge produced no ruling (unreached, over deadline, or unavailable), so parity could not be established either way.
+- **FR-handles-logging-for-chan-d625d58a**: WHEN a caller invokes ChangeUriPlaceholder, the CatalogController SHALL replace the URI placeholder with the corresponding resolved value.
+  - Acceptance criteria:
+    - AC1: WHEN ChangeUriPlaceholder runs, the CatalogController SHALL call AddUriPlaceHolder.
+    - AC2: WHEN ChangeUriPlaceholder is invoked, the CatalogController SHALL accept items of type IEnumerable&lt;CatalogItem>.
+  - Verdict: unverified (evidence: no-evidence)
+  - Reasoning: The implementing code changed and no covering test maps to this requirement.
+  - Caveat: The behaviour judge produced no ruling (unreached, over deadline, or unavailable), so parity could not be established either way.
+- **FR-handles-logging-for-exec-b9e189a9**: WHEN a caller invokes ExecuteScript, the CatalogDBInitializer SHALL execute the specified database script against the catalog database.
+  - Acceptance criteria:
+    - AC1: WHEN ExecuteScript is invoked, the CatalogDBInitializer SHALL accept context of type CatalogDBContext and scriptFile of type string.
+  - Verdict: unverified (evidence: no-evidence)
+  - Reasoning: The implementing code changed and no covering test maps to this requirement.
+  - Caveat: The behaviour judge produced no ruling (unreached, over deadline, or unavailable), so parity could not be established either way.
+- **FR-handles-logging-for-seed-7c324686**: WHEN a caller invokes Seed, the CatalogDBInitializer SHALL populate the catalog database with initial seed data.
+  - Acceptance criteria:
+    - AC1: WHEN Seed runs, the CatalogDBInitializer SHALL call ExecuteScript, AddCatalogTypes, AddCatalogBrands, AddCatalogItems and AddCatalogItemPictures.
+    - AC2: WHEN Seed is invoked, the CatalogDBInitializer SHALL accept context of type CatalogDBContext.
+  - Verdict: unverified (evidence: no-evidence)
+  - Reasoning: The implementing code changed and no covering test maps to this requirement.
+  - Caveat: The behaviour judge produced no ruling (unreached, over deadline, or unavailable), so parity could not be established either way.
+- **FR-provide-activity-id-help-fac95acc**: WHEN a caller invokes an operation of ActivityIdHelper, the ActivityIdHelper SHALL convert the activity identifier to its string representation.
+  - Acceptance criteria:
+    - AC1: The ActivityIdHelper SHALL expose the operation ToString.
+  - Verdict: unverified (evidence: no-evidence)
+  - Reasoning: The implementing code changed and no covering test maps to this requirement.
+  - Caveat: The behaviour judge produced no ruling (unreached, over deadline, or unavailable), so parity could not be established either way.
+- **FR-provide-bundle-config-ca-14b7f64c**: WHEN a caller invokes an operation of BundleConfig, the BundleConfig SHALL register the application's script and style bundles.
+  - Acceptance criteria:
+    - AC1: The BundleConfig SHALL expose the operation RegisterBundles.
+  - Verdict: unverified (evidence: no-evidence)
+  - Reasoning: The implementing code changed and no covering test maps to this requirement.
+  - Caveat: The behaviour judge produced no ruling (unreached, over deadline, or unavailable), so parity could not be established either way.
+- **FR-provide-route-config-cap-6f483ffe**: WHEN a caller invokes an operation of RouteConfig, the RouteConfig SHALL provide the operation RegisterRoutes.
+  - Acceptance criteria:
+    - AC1: The RouteConfig SHALL expose the operation RegisterRoutes.
+  - Verdict: unverified (evidence: no-evidence)
+  - Reasoning: The implementing code changed and no covering test maps to this requirement.
+  - Caveat: The behaviour judge produced no ruling (unreached, over deadline, or unavailable), so parity could not be established either way.
+- **FR-provide-web-request-info-09d2b0ad**: WHEN a caller invokes an operation of WebRequestInfo, the WebRequestInfo SHALL provide the operation ToString.
+  - Acceptance criteria:
+    - AC1: The WebRequestInfo SHALL expose the operation ToString.
+  - Verdict: unverified (evidence: no-evidence)
+  - Reasoning: The implementing code changed and no covering test maps to this requirement.
+  - Caveat: The behaviour judge produced no ruling (unreached, over deadline, or unavailable), so parity could not be established either way.
+- **FR-register-bundles-18ffb057**: WHEN a caller invokes RegisterBundles, the BundleConfig SHALL register the bundles.
+  - Acceptance criteria:
+    - AC1: WHEN RegisterBundles is invoked, the BundleConfig SHALL accept bundles of type BundleCollection.
+  - Verdict: unverified (evidence: no-evidence)
+  - Reasoning: The implementing code changed and no covering test maps to this requirement.
+  - Caveat: The behaviour judge produced no ruling (unreached, over deadline, or unavailable), so parity could not be established either way.
+- **FR-register-routes-b017efa3**: WHEN a caller invokes RegisterRoutes, the RouteConfig SHALL register the routes.
+  - Acceptance criteria:
+    - AC1: WHEN RegisterRoutes is invoked, the RouteConfig SHALL accept routes of type RouteCollection.
+  - Verdict: unverified (evidence: no-evidence)
+  - Reasoning: The implementing code changed and no covering test maps to this requirement.
+  - Caveat: The behaviour judge produced no ruling (unreached, over deadline, or unavailable), so parity could not be established either way.
+- **FR-add-uri-place-holder-f3205cd6**: WHEN a caller invokes AddUriPlaceHolder, the CatalogController SHALL persist the uri place holder.
+  - Acceptance criteria:
+    - AC1: WHEN AddUriPlaceHolder is invoked, the CatalogController SHALL accept item of type CatalogItem.
+  - Verdict: unverified (evidence: no-evidence)
+  - Reasoning: The implementing code changed and no covering test maps to this requirement.
+  - Caveat: The behaviour judge produced no ruling (unreached, over deadline, or unavailable), so parity could not be established either way.
+- **FR-handles-logging-for-pic-86c5ef01**: WHEN a caller creates a PicController, the PicController SHALL initialize the PicController with the given service.
+  - Acceptance criteria:
+    - AC1: WHEN PicController is constructed, the PicController SHALL store service in this.service.
+    - AC2: WHEN PicController is constructed, the PicController SHALL accept service of type ICatalogService.
+  - Verdict: unverified (evidence: no-evidence)
+  - Reasoning: The implementing code changed and no covering test maps to this requirement.
+  - Caveat: The behaviour judge produced no ruling (unreached, over deadline, or unavailable), so parity could not be established either way.
+- **FR-handles-retrieval-for-ac-fc0ae085**: WHEN a caller invokes ActionResult, the PicController SHALL return a file result.
+  - Acceptance criteria:
+    - AC1: IF catalogItemId <= 0, THEN the PicController SHALL return new HttpStatusCodeResult(HttpStatusCode.BadRequest).
+    - AC2: IF item != null, THEN the PicController SHALL return File(buffer, mimetype) (a file result).
+    - AC3: WHEN Index runs, the PicController SHALL call FindCatalogItem and GetImageMimeTypeFromImageFileExtension.
+    - AC4: IF item == null, THEN the PicController SHALL return HttpNotFound().
+    - AC5: The PicController SHALL serve Index only for HTTP GET requests ([HttpGet]).
+    - AC6: WHEN Index is invoked, the PicController SHALL accept catalogItemId of type int.
+  - Verdict: unverified (evidence: no-evidence)
+  - Reasoning: The implementing code changed and no covering test maps to this requirement.
+  - Caveat: The behaviour judge produced no ruling (unreached, over deadline, or unavailable), so parity could not be established either way.
+- **FR-provide-pic-controller-c-bc26ebb1**: WHEN a caller invokes an operation of PicController, the PicController SHALL provide the operations ActionResult and GetImageMimeTypeFromImageFileExtension.
+  - Acceptance criteria:
+    - AC1: The PicController SHALL expose the operations ActionResult and GetImageMimeTypeFromImageFileExtension.
+  - Verdict: unverified (evidence: no-evidence)
+  - Reasoning: The implementing code changed and no covering test maps to this requirement.
+  - Caveat: The behaviour judge produced no ruling (unreached, over deadline, or unavailable), so parity could not be established either way.
+- **FR-provide-program-capabili-77993c1a**: WHEN a caller invokes an operation of Program, the Program SHALL provide the operations Main and IWebHostBuilder.
+  - Acceptance criteria:
+    - AC1: The Program SHALL expose the operations Main and IWebHostBuilder.
+  - Verdict: unverified (evidence: no-evidence)
+  - Reasoning: The implementing code changed and no covering test maps to this requirement.
+  - Caveat: The behaviour judge produced no ruling (unreached, over deadline, or unavailable), so parity could not be established either way.
+- **FR-get-image-mime-type-from-10c76dd8**: WHEN a caller invokes GetImageMimeTypeFromImageFileExtension, the PicController SHALL return the image mime type from the image file extension.
+  - Acceptance criteria:
+    - AC1: WHEN GetImageMimeTypeFromImageFileExtension completes normally, the PicController SHALL return mimetype.
+    - AC2: WHEN GetImageMimeTypeFromImageFileExtension is invoked, the PicController SHALL accept extension of type string.
+  - Verdict: unverified (evidence: no-evidence)
+  - Reasoning: The implementing code changed and no covering test maps to this requirement.
+  - Caveat: The behaviour judge produced no ruling (unreached, over deadline, or unavailable), so parity could not be established either way.
+- **FR-handles-logging-for-bran-b3e554a4**: WHEN a caller creates a BrandsController, the BrandsController SHALL initialize itself using the provided service.
+  - Acceptance criteria:
+    - AC1: WHEN BrandsController is constructed, the BrandsController SHALL store service in _service.
+    - AC2: WHEN BrandsController is constructed, the BrandsController SHALL accept service of type ICatalogService.
+  - Verdict: unverified (evidence: no-evidence)
+  - Reasoning: The implementing code changed and no covering test maps to this requirement.
+  - Caveat: The behaviour judge produced no ruling (unreached, over deadline, or unavailable), so parity could not be established either way.
+- **FR-handles-logging-for-file-5aa9824f**: WHEN a caller creates a FilesController, the FilesController SHALL initialize itself using the provided service.
+  - Acceptance criteria:
+    - AC1: WHEN FilesController is constructed, the FilesController SHALL store service in _service.
+    - AC2: WHEN FilesController is constructed, the FilesController SHALL accept service of type ICatalogService.
+  - Verdict: unverified (evidence: no-evidence)
+  - Reasoning: The implementing code changed and no covering test maps to this requirement.
+  - Caveat: The behaviour judge produced no ruling (unreached, over deadline, or unavailable), so parity could not be established either way.
+- **FR-provide-brand-dto-capabi-6364e72e**: WHEN a caller invokes an operation of BrandDTO, the BrandDTO SHALL hold the Id and Brand values.
+  - Acceptance criteria:
+    - AC1: The BrandDTO SHALL expose the properties Id and Brand.
+  - Verdict: unverified (evidence: no-evidence)
+  - Reasoning: The implementing code changed and no covering test maps to this requirement.
+  - Caveat: The behaviour judge produced no ruling (unreached, over deadline, or unavailable), so parity could not be established either way.
+- **FR-provide-brands-controlle-40797197**: WHEN a caller invokes an operation of BrandsController, the BrandsController SHALL provide the operation IActionResult.
+  - Acceptance criteria:
+    - AC1: The BrandsController SHALL expose the operation IActionResult.
+  - Verdict: unverified (evidence: no-evidence)
+  - Reasoning: The implementing code changed and no covering test maps to this requirement.
+  - Caveat: The behaviour judge produced no ruling (unreached, over deadline, or unavailable), so parity could not be established either way.
+- **FR-provide-files-controller-46e820b6**: WHEN a caller invokes an operation of FilesController, the FilesController SHALL provide the operation IActionResult.
+  - Acceptance criteria:
+    - AC1: The FilesController SHALL expose the operation IActionResult.
+  - Verdict: unverified (evidence: no-evidence)
+  - Reasoning: The implementing code changed and no covering test maps to this requirement.
+  - Caveat: The behaviour judge produced no ruling (unreached, over deadline, or unavailable), so parity could not be established either way.
+- **FR-provide-filter-config-ca-f2890fe3**: WHEN a caller invokes an operation of FilterConfig, the FilterConfig SHALL provide the operation RegisterGlobalFilters.
+  - Acceptance criteria:
+    - AC1: The FilterConfig SHALL expose the operation RegisterGlobalFilters.
+  - Verdict: unverified (evidence: no-evidence)
+  - Reasoning: The implementing code changed and no covering test maps to this requirement.
+  - Caveat: The behaviour judge produced no ruling (unreached, over deadline, or unavailable), so parity could not be established either way.
+- **FR-provide-mvc-application-95db3e10**: WHEN a caller invokes an operation of MvcApplication, the MvcApplication SHALL provide the operations Application_Start, Session_Start, Application_BeginRequest, IContainer and ConfigDataBase.
+  - Acceptance criteria:
+    - AC1: The MvcApplication SHALL expose the operations Application_Start, Session_Start, Application_BeginRequest, IContainer and ConfigDataBase.
+  - Verdict: unverified (evidence: no-evidence)
+  - Reasoning: The implementing code changed and no covering test maps to this requirement.
+  - Caveat: The behaviour judge produced no ruling (unreached, over deadline, or unavailable), so parity could not be established either way.
+- **FR-register-global-filters-9c25801c**: WHEN a caller invokes RegisterGlobalFilters, the FilterConfig SHALL add the application's global filters to the provided filter collection.
+  - Acceptance criteria:
+    - AC1: WHEN RegisterGlobalFilters is invoked, the FilterConfig SHALL accept filters of type GlobalFilterCollection.
+  - Verdict: unverified (evidence: no-evidence)
+  - Reasoning: The implementing code changed and no covering test maps to this requirement.
+  - Caveat: The behaviour judge produced no ruling (unreached, over deadline, or unavailable), so parity could not be established either way.
+- **FR-handles-configuration-fo-16132837**: WHEN a caller invokes IServiceProvider, the Startup SHALL configure and return the application's service provider.
+  - Acceptance criteria:
+    - AC1: WHEN ConfigureServices completes normally, the Startup SHALL return new AutofacServiceProvider(container).
+    - AC2: WHEN ConfigureServices is invoked, the Startup SHALL accept services of type IServiceCollection.
+  - Verdict: unverified (evidence: no-evidence)
+  - Reasoning: The implementing code changed and no covering test maps to this requirement.
+  - Caveat: The behaviour judge produced no ruling (unreached, over deadline, or unavailable), so parity could not be established either way.
+- **FR-handles-configuration-fo-d82d437c**: WHEN a caller creates a Startup, the Startup SHALL initialize the instance using the given configuration.
+  - Acceptance criteria:
+    - AC1: WHEN Startup is constructed, the Startup SHALL accept configuration of type IConfiguration.
+  - Verdict: unverified (evidence: no-evidence)
+  - Reasoning: The implementing code changed and no covering test maps to this requirement.
+  - Caveat: The behaviour judge produced no ruling (unreached, over deadline, or unavailable), so parity could not be established either way.
+- **FR-handles-retrieval-for-da-335617f6**: WHEN eShopPorted.Startup.DateTime is used, the Startup SHALL expose the application's start time as a DateTime value.
+  - Acceptance criteria:
+    - AC1: The Startup SHALL expose StartTime as a DateTime property with a public get accessor.
+  - Verdict: unverified (evidence: no-evidence)
+  - Reasoning: The implementing code changed and no covering test maps to this requirement.
+  - Caveat: The behaviour judge produced no ruling (unreached, over deadline, or unavailable), so parity could not be established either way.
+- **FR-handles-retrieval-for-ht-a688f601**: WHEN a caller invokes HttpResponseMessage, the FilesController SHALL process the request and return an HttpResponseMessage.
+  - Acceptance criteria:
+    - AC1: WHEN Get runs, the FilesController SHALL call GetCatalogBrands.
+    - AC2: WHEN Get completes normally, the FilesController SHALL return response.
+  - Verdict: unverified (evidence: no-evidence)
+  - Reasoning: The implementing code changed and no covering test maps to this requirement.
+  - Caveat: The behaviour judge produced no ruling (unreached, over deadline, or unavailable), so parity could not be established either way.
+- **FR-handles-retrieval-for-i-656ea2e0**: WHEN eShopPorted.Startup.IConfiguration is used, the Startup SHALL expose the configuration value as an IConfiguration.
+  - Acceptance criteria:
+    - AC1: The Startup SHALL expose Configuration as an IConfiguration property with a public get accessor.
+  - Verdict: unverified (evidence: no-evidence)
+  - Reasoning: The implementing code changed and no covering test maps to this requirement.
+  - Caveat: The behaviour judge produced no ruling (unreached, over deadline, or unavailable), so parity could not be established either way.
+- **FR-provide-catalog-controll-9860c7d2**: WHEN a caller invokes an operation of CatalogController2, the CatalogController2 SHALL provide the operation ActionResult.
+  - Acceptance criteria:
+    - AC1: The CatalogController2 SHALL expose the operation ActionResult.
+  - Verdict: unverified (evidence: no-evidence)
+  - Reasoning: The implementing code changed and no covering test maps to this requirement.
+  - Caveat: The behaviour judge produced no ruling (unreached, over deadline, or unavailable), so parity could not be established either way.
+- **FR-provide-serializing-capa-122703de**: WHEN a caller invokes an operation of Serializing, the Serializing SHALL provide the operations Stream and DeserializeBinary.
+  - Acceptance criteria:
+    - AC1: The Serializing SHALL expose the operations Stream and DeserializeBinary.
+  - Verdict: unverified (evidence: no-evidence)
+  - Reasoning: The implementing code changed and no covering test maps to this requirement.
+  - Caveat: The behaviour judge produced no ruling (unreached, over deadline, or unavailable), so parity could not be established either way.
+- **FR-provide-web-api-config-c-206dbcb5**: WHEN a caller invokes an operation of WebApiConfig, the WebApiConfig SHALL provide the operation Register.
+  - Acceptance criteria:
+    - AC1: The WebApiConfig SHALL expose the operation Register.
+  - Verdict: unverified (evidence: no-evidence)
+  - Reasoning: The implementing code changed and no covering test maps to this requirement.
+  - Caveat: The behaviour judge produced no ruling (unreached, over deadline, or unavailable), so parity could not be established either way.
+- **FR-register-configuration-0afa5ee2**: WHEN a caller invokes Register, the WebApiConfig SHALL register the Web API configuration.
+  - Acceptance criteria:
+    - AC1: WHEN Register is invoked, the WebApiConfig SHALL accept config of type HttpConfiguration.
+  - Verdict: unverified (evidence: no-evidence)
+  - Reasoning: The implementing code changed and no covering test maps to this requirement.
+  - Caveat: The behaviour judge produced no ruling (unreached, over deadline, or unavailable), so parity could not be established either way.
+- **NFR-COMPATIBILITY-ae6b810f**: WHEN isIE, an operation of CatalogItem, an operation of CatalogBrand or another supporting component interacts with a versioned runtime, SDK or protocol, the system SHALL remain compatible with its declared runtime and protocol versions.
+  - Acceptance criteria:
+    - AC1: WHEN isIE interacts with a versioned runtime, SDK or protocol, the system SHALL honour the declared runtime and protocol versions (evidence: version in isIE, popper-utils.js:97).
+    - AC2: WHEN isIE interacts with a versioned runtime, SDK or protocol, the system SHALL honour the declared runtime and protocol versions (evidence: version in isIE, popper.js:158).
+    - AC3: WHEN isIE interacts with a versioned runtime, SDK or protocol, the system SHALL honour the declared runtime and protocol versions (evidence: version in isIE, popper-utils.js:102).
+    - AC4: WHEN isIE interacts with a versioned runtime, SDK or protocol, the system SHALL honour the declared runtime and protocol versions (evidence: version in isIE, popper.js:163).
+    - AC5: WHEN isIE, an operation of eShopWinForms.eShopServiceReference.CatalogItem, an operation configured by eShopWinForms.eShopServiceReference.CatalogItem.CatalogBrandField, an operation configured by eShopWinForms.eShopServiceReference.CatalogItem.CatalogBrandIdField or an operation configured by eShopWinForms.eShopServiceReference.CatalogItem.CatalogTypeField (+45 more) interacts with a versioned runtime, SDK or protocol, the system SHALL honour the declared runtime and protocol versions (evidence: version in isIE, popper.js:158; version in isIE, popper-utils.js:102; version in isIE, popper.js:163; [System.CodeDom.Compiler.GeneratedCodeAttribute("System.Runtime.Serialization", "4.0.0.0")] in eShopWinForms.eShopServiceReference.CatalogItem, Reference.cs:17; [System.Runtime.Serialization.OptionalFieldAttribute()] in eShopWinForms.eShopServiceReference.CatalogItem.CatalogBrandField, Reference.cs:25 (+87 more)).
+  - Verdict: unverified (evidence: no-evidence)
+  - Reasoning: The implementing code changed and no covering test maps to this requirement.
+  - Caveat: The behaviour judge produced no ruling (unreached, over deadline, or unavailable), so parity could not be established either way.
+- **NFR-OBSERVABILITY-9f46ce8c**: WHEN isModifierRequired, runModifiers, computeStyle or another supporting component handles a request or an error, the system SHALL emit logs, metrics, or traces for its operations.
+  - Acceptance criteria:
+    - AC1: WHEN isModifierRequired is invoked, the system SHALL record a warning-level log entry (evidence: console.warn in isModifierRequired, popper-utils.js:851).
+    - AC2: WHEN runModifiers is invoked, the system SHALL record a warning-level log entry (evidence: console.warn in runModifiers, popper-utils.js:916).
+    - AC3: WHEN runModifiers is invoked, the system SHALL record a warning-level log entry (evidence: console.warn in runModifiers, popper.js:786).
+    - AC4: WHEN computeStyle is invoked, the system SHALL record a warning-level log entry (evidence: console.warn in computeStyle, popper.js:1126).
+    - AC5: WHEN isModifierRequired is invoked, the system SHALL record a warning-level log entry (evidence: console.warn in isModifierRequired, popper.js:1223).
+    - AC6: WHEN arrow, parseOffset, isModifierRequired, runModifiers or computeStyle (+11 more) handles a request or an error, the system SHALL emit logs, metrics or traces (evidence: console.warn in arrow, popper.js:1255; console.warn in parseOffset, popper.js:1579; console.warn in isModifierRequired, popper-utils.js:902; console.warn in runModifiers, popper-utils.js:967; console.warn in runModifiers, popper.js:870 (+89 more)).
+  - Verdict: unverified (evidence: no-evidence)
+  - Reasoning: The implementing code changed and no covering test maps to this requirement.
+  - Caveat: The behaviour judge produced no ruling (unreached, over deadline, or unavailable), so parity could not be established either way.
+- **NFR-PERFORMANCE-6936d350**: WHEN get_defaultTimeout, set_defaultTimeout, get_timeout or another supporting component waits on a resource or dependency, the system SHALL bound resource use with timeouts, rate limits, or concurrency controls.
+  - Acceptance criteria:
+    - AC1: WHEN an operation configured by longerTimeoutBrowsers waits on a resource or dependency, the system SHALL bound the wait with a timeout, rate limit or concurrency control (evidence: longerTimeoutBrowsers in longerTimeoutBrowsers, popper-utils.js:586).
+    - AC2: WHEN an operation configured by timeoutDuration waits on a resource or dependency, the system SHALL bound the wait with a timeout, rate limit or concurrency control (evidence: timeoutDuration in timeoutDuration, popper-utils.js:587).
+    - AC3: WHEN an operation configured by longerTimeoutBrowsers waits on a resource or dependency, the system SHALL bound the wait with a timeout, rate limit or concurrency control (evidence: longerTimeoutBrowsers in longerTimeoutBrowsers, popper.js:27).
+    - AC4: WHEN an operation configured by timeoutDuration waits on a resource or dependency, the system SHALL bound the wait with a timeout, rate limit or concurrency control (evidence: timeoutDuration in timeoutDuration, popper.js:28).
+    - AC5: WHEN an operation configured by longerTimeoutBrowsers waits on a resource or dependency, the system SHALL bound the wait with a timeout, rate limit or concurrency control (evidence: longerTimeoutBrowsers in longerTimeoutBrowsers, popper-utils.js:619).
+    - AC6: WHEN an operation configured by timeoutDuration, an operation configured by longerTimeoutBrowsers, Sys.Net._WebRequestManager.get_defaultTimeout, Sys.Net._WebRequestManager.set_defaultTimeout or Sys.Net.WebRequest.get_timeout (+6 more) waits on a resource or dependency, the system SHALL bound the wait with a timeout, rate limit or concurrency control (evidence: timeoutDuration in timeoutDuration, popper-utils.js:620; longerTimeoutBrowsers in longerTimeoutBrowsers, popper.js:27; timeoutDuration in timeoutDuration, popper.js:28; longerTimeoutBrowsers in longerTimeoutBrowsers, popper-utils.js:586; timeoutDuration in timeoutDuration, popper-utils.js:587 (+60 more)).
+  - Verdict: unverified (evidence: no-evidence)
+  - Reasoning: The implementing code changed and no covering test maps to this requirement.
+  - Caveat: The behaviour judge produced no ruling (unreached, over deadline, or unavailable), so parity could not be established either way.
+- **NFR-RELIABILITY-49e8cb2f**: WHEN an exception is raised in getBoundingClientRect, WebForm_FindFirstFocusableChild, WebForm_AutoFocus or another supporting component, the system SHALL catch and handle exceptions raised during its operations.
+  - Acceptance criteria:
+    - AC1: IF an exception is thrown in getBoundingClientRect, THEN the system SHALL catch it and stop it from propagating out of getBoundingClientRect (evidence: catch (e) in getBoundingClientRect, popper-utils.js:335).
+    - AC2: IF an exception is thrown in getBoundingClientRect, THEN the system SHALL catch it and stop it from propagating out of getBoundingClientRect (evidence: catch (e) in getBoundingClientRect, popper.js:396).
+    - AC3: IF an exception is thrown in getBoundingClientRect, THEN the system SHALL catch it and stop it from propagating out of getBoundingClientRect (evidence: catch (e) in getBoundingClientRect, popper-utils.js:346).
+    - AC4: IF an exception is thrown in getBoundingClientRect, THEN the system SHALL catch it and stop it from propagating out of getBoundingClientRect (evidence: catch (e) in getBoundingClientRect, popper.js:450).
+    - AC5: WHEN an exception is raised in getBoundingClientRect, WebForm_FindFirstFocusableChild, WebForm_AutoFocus, Menu_GetData or window.__smartNav.update (+12 more), the system SHALL catch and handle the exception (evidence: catch (e) in getBoundingClientRect, popper.js:396; catch (e) in getBoundingClientRect, popper-utils.js:346; catch (e) in getBoundingClientRect, popper.js:450; catch (e) in getBoundingClientRect, popper-utils.js:335; catch (e) in getBoundingClientRect, popper.js:396 (+56 more)).
+  - Verdict: unverified (evidence: no-evidence)
+  - Reasoning: The implementing code changed and no covering test maps to this requirement.
+  - Caveat: The behaviour judge produced no ruling (unreached, over deadline, or unavailable), so parity could not be established either way.
+- **NFR-SECURITY-77058ab1**: WHEN untrusted input reaches ActionResult, Page_ClientValidate, ValidatorValidate or another supporting component, the system SHALL validate and sanitize untrusted input before use.
+  - Acceptance criteria:
+    - AC1: WHEN a request to eShopPorted.Controllers.CatalogController.ActionResult does not carry a valid anti-forgery token, the system SHALL reject the request before ActionResult runs (evidence: [ValidateAntiForgeryToken] on eShopPorted.Controllers.CatalogController.ActionResult, CatalogController.cs:134).
+    - AC2: WHEN a request to eShopLegacyMVC.Controllers.CatalogController.ActionResult does not carry a valid anti-forgery token, the system SHALL reject the request before ActionResult runs (evidence: [ValidateAntiForgeryToken] on eShopLegacyMVC.Controllers.CatalogController.ActionResult, CatalogController.cs:133).
+    - AC3: WHEN untrusted input reaches an operation of WebForm_PostBackOptions, the system SHALL validate or sanitize the input before use (evidence: validation in WebForm_PostBackOptions, WebForms.js:2).
+    - AC4: WHEN untrusted input reaches an operation configured by Page_ValidationVer, the system SHALL validate or sanitize the input before use (evidence: Page_ValidationVer in Page_ValidationVer, WebUIValidation.js:2).
+    - AC5: WHEN untrusted input reaches Page_ClientValidate, the system SHALL validate or sanitize the input before use (evidence: Page_ClientValidate in Page_ClientValidate, WebUIValidation.js:113).
+    - AC6: WHEN untrusted input reaches ValidatorValidate, IsValidationGroupMatch, ValidationSummaryOnSubmit, Function.validateParameters or Function._validateParams (+6 more), the system SHALL validate or sanitize the input before use (evidence: ValidatorValidate in ValidatorValidate, WebUIValidation.js:197; IsValidationGroupMatch in IsValidationGroupMatch, WebUIValidation.js:266; ValidationSummaryOnSubmit in ValidationSummaryOnSubmit, WebUIValidation.js:477; validateParameters in Function.validateParameters, MicrosoftAjax.js:6; _validateParams in Function._validateParams, MicrosoftAjax.js:6 (+24 more)).
+  - Verdict: unverified (evidence: no-evidence)
+  - Reasoning: The implementing code changed and no covering test maps to this requirement.
+  - Caveat: The behaviour judge produced no ruling (unreached, over deadline, or unavailable), so parity could not be established either way.
+
+### Satisfied (383) — reasoning
+
+- **FR-create-catalog-item-5d6d8924**: WHEN a caller invokes CreateCatalogItem, the CatalogService SHALL persist the catalog item.
+  - Acceptance criteria:
+    - AC1: WHEN CreateCatalogItem runs, the CatalogService SHALL add catalogItem to db.CatalogItems and save the changes via db.SaveChanges().
+    - AC2: WHEN CreateCatalogItem is invoked, the CatalogService SHALL accept catalogItem of type CatalogItem.
+  - Verdict: satisfied (evidence: judge-preserved)
+  - Reasoning: Behaviour judge (confidence: high) ruled the change behaviour-preserving: All implementations of CreateCatalogItem across every project variant are byte-for-byte identical between BEFORE and AFTER (same code, same line ranges). No change in persistence logic, ID assignment, or SaveChanges calls.
+  - Judge confidence: high
+  - Caveat: Static behavioural judgement of the before/after implementation, not an executed test.
+- **FR-get-catalog-brands-8de020a2**: WHEN a caller invokes GetCatalogBrands, the CatalogService SHALL return the catalog brands.
+  - Acceptance criteria:
+    - AC1: WHEN GetCatalogBrands completes normally, the CatalogService SHALL return db.CatalogBrands.
+  - Verdict: satisfied (evidence: judge-preserved)
+  - Reasoning: Behaviour judge (confidence: high) ruled the change behaviour-preserving: All implementations of GetCatalogBrands across every project variant are identical between BEFORE and AFTER, with no modifications to logic or data retrieval.
+  - Judge confidence: high
+  - Caveat: Static behavioural judgement of the before/after implementation, not an executed test.
+- **FR-get-catalog-types-4d8a3da7**: WHEN a caller invokes GetCatalogTypes, the CatalogService SHALL return the catalog types.
+  - Acceptance criteria:
+    - AC1: WHEN GetCatalogTypes completes normally, the CatalogService SHALL return db.CatalogTypes.
+  - Verdict: satisfied (evidence: judge-preserved)
+  - Reasoning: Behaviour judge (confidence: high) ruled the change behaviour-preserving: All implementations of GetCatalogTypes across every project variant are identical between BEFORE and AFTER, with no modifications to logic or data retrieval.
+  - Judge confidence: high
+  - Caveat: Static behavioural judgement of the before/after implementation, not an executed test.
+- **FR-remove-catalog-item-fbb90c85**: WHEN a caller invokes RemoveCatalogItem, the CatalogService SHALL delete the catalog item.
+  - Acceptance criteria:
+    - AC1: WHEN RemoveCatalogItem runs, the CatalogService SHALL remove catalogItem from db.CatalogItems and save the changes via db.SaveChanges().
+    - AC2: WHEN RemoveCatalogItem is invoked, the CatalogService SHALL accept catalogItem of type CatalogItem.
+  - Verdict: satisfied (evidence: judge-preserved)
+  - Reasoning: Behaviour judge (confidence: high) ruled the change behaviour-preserving: All RemoveCatalogItem implementations across every project variant are byte-for-byte identical between BEFORE and AFTER, including DB-backed, mock, WCF service, client, and WinForms reference implementations.
+  - Judge confidence: high
+  - Caveat: Static behavioural judgement of the before/after implementation, not an executed test.
+- **FR-update-catalog-item-52740424**: WHEN a caller invokes UpdateCatalogItem, the CatalogService SHALL save the changes to the catalog item.
+  - Acceptance criteria:
+    - AC1: WHEN UpdateCatalogItem runs, the CatalogService SHALL save the changes via db.SaveChanges().
+    - AC2: WHEN UpdateCatalogItem is invoked, the CatalogService SHALL accept catalogItem of type CatalogItem.
+  - Verdict: satisfied (evidence: judge-preserved)
+  - Reasoning: Behaviour judge (confidence: high) ruled the change behaviour-preserving: All UpdateCatalogItem implementations across every project variant are identical between BEFORE and AFTER, preserving the save-changes behaviour via EntityState.Modified + SaveChanges or mock list replacement.
+  - Judge confidence: high
+  - Caveat: Static behavioural judgement of the before/after implementation, not an executed test.
+- **FR-handles-retrieval-for-ca-4017e76b**: WHEN a caller invokes CatalogItem, the CatalogService SHALL return the matching catalog item or a default value if none is found.
+  - Acceptance criteria:
+    - AC1: WHEN FindCatalogItem completes normally, the CatalogService SHALL return db.CatalogItems .Include(c => c.CatalogBrand) .Include(c => c.CatalogType) .FirstOrDefault(ci => ci.Id == id).
+    - AC2: WHEN FindCatalogItem is invoked, the CatalogService SHALL accept id of type int.
+  - Verdict: satisfied (evidence: judge-preserved)
+  - Reasoning: Behaviour judge (confidence: high) ruled the change behaviour-preserving: All FindCatalogItem (CatalogItem lookup) implementations across every project variant are unchanged between BEFORE and AFTER, including FirstOrDefault usage returning null/default when not found.
+  - Judge confidence: high
+  - Caveat: Static behavioural judgement of the before/after implementation, not an executed test.
+- **FR-compute-auto-placement-21a77d9b**: WHEN a caller invokes computeAutoPlacement, the popper-utils module SHALL compute the auto placement.
+  - Acceptance criteria:
+    - AC1: IF placement.indexOf('auto') === -1, THEN the popper-utils module SHALL return placement.
+    - AC2: WHEN computeAutoPlacement runs, the popper-utils module SHALL call indexOf, getBoundaries and getArea.
+    - AC3: WHEN computeAutoPlacement completes normally, the popper-utils module SHALL return computedPlacement + (variation ? `-${variation}` : '').
+    - AC4: WHEN computeAutoPlacement is invoked, the popper-utils module SHALL accept placement, refRect, popper, reference and boundariesElement (+1 more) as input.
+  - Verdict: satisfied (evidence: judge-preserved)
+  - Reasoning: Behaviour judge (confidence: high) ruled the change behaviour-preserving: The computeAutoPlacement function body is byte-for-byte identical between BEFORE and AFTER across all file variants (popper-utils.js, popper.js, esm versions). No logic, parameter handling, or return value computation has changed.
+  - Judge confidence: high
+  - Caveat: Static behavioural judgement of the before/after implementation, not an executed test.
+- **FR-find-common-offset-paren-532010d7**: WHEN a caller invokes findCommonOffsetParent, the popper-utils module SHALL return the common offset parent for the given element1 and element2.
+  - Acceptance criteria:
+    - AC1: IF !element1 || !element1.nodeType || !element2 || !element2.nodeType, THEN the popper-utils module SHALL return document.documentElement.
+    - AC2: IF element1 !== commonAncestorContainer && element2 !== commonAncestorContainer || start.contains(end), THEN the popper-utils module SHALL return getOffsetParent(commonAncestorContainer).
+    - AC3: IF isOffsetContainer(commonAncestorContainer), THEN the popper-utils module SHALL return commonAncestorContainer.
+    - AC4: IF element1root.host, THEN the popper-utils module SHALL return findCommonOffsetParent(element1root.host, element2).
+    - AC5: WHEN findCommonOffsetParent runs, the popper-utils module SHALL call contains, isOffsetContainer, getOffsetParent and getRoot.
+    - AC6: WHEN findCommonOffsetParent is invoked, the popper-utils module SHALL accept element1 and element2 as input.
+  - Verdict: satisfied (evidence: judge-preserved)
+  - Reasoning: Behaviour judge (confidence: high) ruled the change behaviour-preserving: The findCommonOffsetParent function implementation is unchanged between BEFORE and AFTER across all file variants shown. The algorithm for determining common ancestor, shadow DOM handling, and offset parent resolution remains identical.
+  - Judge confidence: high
+  - Caveat: Static behavioural judgement of the before/after implementation, not an executed test.
+- **FR-find-index-6d13b54a**: WHEN a caller invokes findIndex, the popper-utils module SHALL return the index for the given arr, prop and value.
+  - Acceptance criteria:
+    - AC1: IF Array.prototype.findIndex, THEN the popper-utils module SHALL return arr.findIndex(cur => cur[prop] === value).
+    - AC2: WHEN findIndex runs, the popper-utils module SHALL call find and indexOf.
+    - AC3: WHEN findIndex completes normally, the popper-utils module SHALL return arr.indexOf(match).
+    - AC4: WHEN findIndex is invoked, the popper-utils module SHALL accept arr, prop and value as input.
+  - Verdict: satisfied (evidence: judge-preserved)
+  - Reasoning: Behaviour judge (confidence: high) ruled the change behaviour-preserving: The findIndex function logic (native findIndex fallback to find+indexOf) is identical in BEFORE and AFTER across all shown file variants. No change to the search/matching behavior or return value.
+  - Judge confidence: high
+  - Caveat: Static behavioural judgement of the before/after implementation, not an executed test.
+- **FR-find-validation-04113d76**: WHEN a caller invokes find, the popper-utils module SHALL find and return the matching element in the arr.
+  - Acceptance criteria:
+    - AC1: IF Array.prototype.find, THEN the popper-utils module SHALL return arr.find(check).
+    - AC2: WHEN find completes normally, the popper-utils module SHALL return arr.filter(check)[0].
+    - AC3: WHEN find is invoked, the popper-utils module SHALL accept arr and check as input.
+  - Verdict: satisfied (evidence: judge-preserved)
+  - Reasoning: Behaviour judge (confidence: high) ruled the change behaviour-preserving: The find() function implementation is byte-for-byte identical across BEFORE and AFTER in all file locations. The AFTER section includes some duplicated/repeated snippets of the same unchanged function body, but no logic has changed. Behavior of finding and returning the matching element via native find or filter fallback is unchanged.
+  - Judge confidence: high
+  - Caveat: Static behavioural judgement of the before/after implementation, not an executed test.
+- **FR-get-area-9343eea9**: WHEN a caller invokes getArea, the popper-utils module SHALL return the area for the given width height.
+  - Acceptance criteria:
+    - AC1: WHEN getArea completes normally, the popper-utils module SHALL return width * height.
+    - AC2: WHEN getArea is invoked, the popper-utils module SHALL accept destructured {width, height} as input.
+  - Verdict: satisfied (evidence: judge-preserved)
+  - Reasoning: Behaviour judge (confidence: high) ruled the change behaviour-preserving: The getArea() function body (width * height) is unchanged in both the ES5 and ESM variants across all project copies. AFTER shows duplicated snippets of the identical function, which appears to be an artifact of extraction rather than a behavioral change. The computation logic is identical.
+  - Judge confidence: high
+  - Caveat: Static behavioural judgement of the before/after implementation, not an executed test.
+- **FR-get-borders-size-5658ccea**: WHEN a caller invokes getBordersSize, the popper-utils module SHALL return the borders size for the given styles and axis.
+  - Acceptance criteria:
+    - AC1: WHEN getBordersSize completes normally, the popper-utils module SHALL return parseFloat(styles[`border${sideA}Width`], 10) + parseFloat(styles[`border${sideB}Width`], 10).
+    - AC2: WHEN getBordersSize is invoked, the popper-utils module SHALL accept styles and axis as input.
+  - Verdict: satisfied (evidence: judge-preserved)
+  - Reasoning: Behaviour judge (confidence: high) ruled the change behaviour-preserving: The getBordersSize() function logic (computing sideA/sideB and summing parseFloat values) is identical between BEFORE and AFTER across all file locations. AFTER contains repeated/duplicated copies of the same unchanged function, likely extraction artifacts, but the actual behavior and computation remain the same.
+  - Judge confidence: high
+  - Caveat: Static behavioural judgement of the before/after implementation, not an executed test.
+- **FR-get-boundaries-e16fb209**: WHEN a caller invokes getBoundaries, the popper-utils module SHALL return the boundaries for the given popper, reference, padding, boundaries element and fixed position.
+  - Acceptance criteria:
+    - AC1: WHEN getBoundaries runs, the popper-utils module SHALL call getFixedPositionOffsetParent, findCommonOffsetParent, getViewportOffsetRectRelativeToArtbitraryNode, getScrollParent and getParentNode (+3 more).
+    - AC2: WHEN getBoundaries completes normally, the popper-utils module SHALL return boundaries.
+    - AC3: WHEN getBoundaries is invoked, the popper-utils module SHALL accept popper, reference, padding, boundariesElement and fixedPosition defaulting to false as input.
+  - Verdict: satisfied (evidence: judge-preserved)
+  - Reasoning: Behaviour judge (confidence: high) ruled the change behaviour-preserving: The getBoundaries function implementation is identical character-for-character between BEFORE and AFTER across all file copies shown (popper-utils.js, popper.js, esm variants). No logic, parameter handling, or return value computation changed.
+  - Judge confidence: high
+  - Caveat: Static behavioural judgement of the before/after implementation, not an executed test.
+- **FR-get-bounding-client-rect-f7b7d751**: WHEN a caller invokes getBoundingClientRect, the popper-utils module SHALL return the bounding client rect for the given element.
+  - Acceptance criteria:
+    - AC1: WHEN getBoundingClientRect runs, the popper-utils module SHALL call isIE, getScroll, getWindowSizes, getStyleComputedProperty and getBordersSize (+1 more).
+    - AC2: WHEN getBoundingClientRect completes normally, the popper-utils module SHALL return getClientRect(result).
+    - AC3: WHEN getBoundingClientRect is invoked, the popper-utils module SHALL accept element as input.
+  - Verdict: satisfied (evidence: judge-preserved)
+  - Reasoning: Behaviour judge (confidence: high) ruled the change behaviour-preserving: The getBoundingClientRect function body is unchanged between BEFORE and AFTER across all shown file variants, including IE10 handling, scrollbar size subtraction, and the final getClientRect call. No behavioral difference is evident.
+  - Judge confidence: high
+  - Caveat: Static behavioural judgement of the before/after implementation, not an executed test.
+- **FR-get-client-rect-252e996f**: WHEN a caller invokes getClientRect, the popper-utils module SHALL return the client rect for the given offsets.
+  - Acceptance criteria:
+    - AC1: WHEN getClientRect completes normally, the popper-utils module SHALL return _extends({}, offsets, { right: offsets.left + offsets.width, bottom: offsets.top + offsets.height }).
+    - AC2: WHEN getClientRect is invoked, the popper-utils module SHALL accept offsets as input.
+  - Verdict: satisfied (evidence: judge-preserved)
+  - Reasoning: Behaviour judge (confidence: high) ruled the change behaviour-preserving: The getClientRect function logic (merging offsets and computing right/bottom) is unchanged between BEFORE and AFTER. The AFTER listing shows some duplicated/truncated snippets with stray '/**' comment artifacts, but the core function body and its computation remain identical, indicating no behavioral change.
+  - Judge confidence: high
+  - Caveat: Static behavioural judgement of the before/after implementation, not an executed test.
+- **FR-get-fixed-position-offse-bf193cd3**: WHEN a caller invokes getFixedPositionOffsetParent, the popper-utils module SHALL return the fixed position offset parent for the given element.
+  - Acceptance criteria:
+    - AC1: IF !element || !element.parentElement || isIE(), THEN the popper-utils module SHALL return document.documentElement.
+    - AC2: WHEN getFixedPositionOffsetParent runs, the popper-utils module SHALL call isIE and getStyleComputedProperty.
+    - AC3: WHEN getFixedPositionOffsetParent completes normally, the popper-utils module SHALL return el || document.documentElement.
+    - AC4: WHEN getFixedPositionOffsetParent is invoked, the popper-utils module SHALL accept element as input.
+  - Verdict: satisfied (evidence: judge-preserved)
+  - Reasoning: Behaviour judge (confidence: high) ruled the change behaviour-preserving: The getFixedPositionOffsetParent function body is byte-for-byte identical between BEFORE and AFTER across all file variants shown. The AFTER listing contains duplicated/repeated copies of the same unchanged function (likely an artifact of the diff extraction), but no logic change is evident.
+  - Judge confidence: high
+  - Caveat: Static behavioural judgement of the before/after implementation, not an executed test.
+- **FR-get-offset-parent-64222549**: WHEN a caller invokes getOffsetParent, the popper-utils module SHALL return the offset parent for the given element.
+  - Acceptance criteria:
+    - AC1: IF !element, THEN the popper-utils module SHALL return document.documentElement.
+    - AC2: IF !nodeName || nodeName === 'BODY' || nodeName === 'HTML', THEN the popper-utils module SHALL return element ? element.ownerDocument.documentElement : document.documentElement.
+    - AC3: IF ['TD', 'TABLE'].indexOf(offsetParent.nodeName) !== -1 && getStyleComputedProperty(offsetParent, 'position') === 'static', THEN the popper-utils module SHALL return getOffsetParent(offsetParent).
+    - AC4: WHEN getOffsetParent runs, the popper-utils module SHALL call isIE, indexOf and getStyleComputedProperty.
+    - AC5: WHEN getOffsetParent completes normally, the popper-utils module SHALL return offsetParent.
+    - AC6: WHEN getOffsetParent is invoked, the popper-utils module SHALL accept element as input.
+  - Verdict: satisfied (evidence: judge-preserved)
+  - Reasoning: Behaviour judge (confidence: high) ruled the change behaviour-preserving: The getOffsetParent function implementation is unchanged between BEFORE and AFTER; the same logic (checking offsetParent, skipping hidden elements, handling TD/TABLE edge cases) is present identically in both. Duplicated entries in AFTER appear to be extraction artifacts, not real behavioral differences.
+  - Judge confidence: high
+  - Caveat: Static behavioural judgement of the before/after implementation, not an executed test.
+- **FR-get-offset-rect-relative-69f7f343**: WHEN a caller invokes getOffsetRectRelativeToArbitraryNode, the popper-utils module SHALL return the offset rect relative to the arbitrary node.
+  - Acceptance criteria:
+    - AC1: WHEN getOffsetRectRelativeToArbitraryNode runs, the popper-utils module SHALL call isIE, getBoundingClientRect, getScrollParent, getStyleComputedProperty and getClientRect (+2 more).
+    - AC2: WHEN getOffsetRectRelativeToArbitraryNode completes normally, the popper-utils module SHALL return offsets.
+    - AC3: WHEN getOffsetRectRelativeToArbitraryNode is invoked, the popper-utils module SHALL accept children, parent and fixedPosition defaulting to false as input.
+  - Verdict: satisfied (evidence: judge-preserved)
+  - Reasoning: Behaviour judge (confidence: high) ruled the change behaviour-preserving: The getOffsetRectRelativeToArbitraryNode function is identical in BEFORE and AFTER across all shown file variants (both ES6 and ES5/esm versions), including the IE10 handling, margin subtraction logic, and scroll inclusion logic. No functional change is observed.
+  - Judge confidence: high
+  - Caveat: Static behavioural judgement of the before/after implementation, not an executed test.
+- **FR-get-opposite-placement-bc9536ce**: WHEN a caller invokes getOppositePlacement, the popper-utils module SHALL return the opposite placement for the given placement.
+  - Acceptance criteria:
+    - AC1: WHEN getOppositePlacement completes normally, the popper-utils module SHALL return placement.replace(/left|right|bottom|top/g, matched => hash[matched]).
+    - AC2: WHEN getOppositePlacement is invoked, the popper-utils module SHALL accept placement as input.
+  - Verdict: satisfied (evidence: judge-preserved)
+  - Reasoning: Behaviour judge (confidence: high) ruled the change behaviour-preserving: The getOppositePlacement function body is identical in BEFORE and AFTER across all file locations. The AFTER section contains some duplicated/truncated snippets with trailing comment markers, but the actual function logic (hash map and regex replace) is unchanged everywhere it appears.
+  - Judge confidence: high
+  - Caveat: Static behavioural judgement of the before/after implementation, not an executed test.
+- **FR-get-outer-sizes-cb1935e1**: WHEN a caller invokes getOuterSizes, the popper-utils module SHALL return the outer sizes for the given element.
+  - Acceptance criteria:
+    - AC1: WHEN getOuterSizes completes normally, the popper-utils module SHALL return result.
+    - AC2: WHEN getOuterSizes is invoked, the popper-utils module SHALL accept element as input.
+  - Verdict: satisfied (evidence: judge-preserved)
+  - Reasoning: Behaviour judge (confidence: high) ruled the change behaviour-preserving: The getOuterSizes function implementation (computing margins and returning width/height) is unchanged between BEFORE and AFTER across all listed files. Extra duplicated snippets in AFTER appear to be artifacts of truncation/formatting but the logic itself is identical.
+  - Judge confidence: high
+  - Caveat: Static behavioural judgement of the before/after implementation, not an executed test.
+- **FR-get-parent-node-32cce142**: WHEN a caller invokes getParentNode, the popper-utils module SHALL return the parent node for the given element.
+  - Acceptance criteria:
+    - AC1: IF element.nodeName === 'HTML', THEN the popper-utils module SHALL return element.
+    - AC2: WHEN getParentNode completes normally, the popper-utils module SHALL return element.parentNode || element.host.
+    - AC3: WHEN getParentNode is invoked, the popper-utils module SHALL accept element as input.
+  - Verdict: satisfied (evidence: judge-preserved)
+  - Reasoning: Behaviour judge (confidence: high) ruled the change behaviour-preserving: The getParentNode function logic (checking nodeName === 'HTML' then returning parentNode or host) is identical in BEFORE and AFTER for all file paths shown. No behavioral change is evident.
+  - Judge confidence: high
+  - Caveat: Static behavioural judgement of the before/after implementation, not an executed test.
+- **FR-get-popper-offsets-7dd3451c**: WHEN a caller invokes getPopperOffsets, the popper-utils module SHALL return the popper offsets for the given popper, reference offsets and placement.
+  - Acceptance criteria:
+    - AC1: WHEN getPopperOffsets runs, the popper-utils module SHALL call getOuterSizes, indexOf and getOppositePlacement.
+    - AC2: WHEN getPopperOffsets completes normally, the popper-utils module SHALL return popperOffsets.
+    - AC3: WHEN getPopperOffsets is invoked, the popper-utils module SHALL accept popper, referenceOffsets and placement as input.
+  - Verdict: satisfied (evidence: judge-preserved)
+  - Reasoning: Behaviour judge (confidence: high) ruled the change behaviour-preserving: The getPopperOffsets function body is identical in BEFORE and AFTER across all listed file copies; only duplicated/truncated snippets and comment markers differ. No logic change observed.
+  - Judge confidence: high
+  - Caveat: Static behavioural judgement of the before/after implementation, not an executed test.
+- **FR-get-reference-offsets-caee31a8**: WHEN a caller invokes getReferenceOffsets, the popper-utils module SHALL return the reference offsets for the given state, popper, reference and fixed position.
+  - Acceptance criteria:
+    - AC1: WHEN getReferenceOffsets runs, the popper-utils module SHALL call getFixedPositionOffsetParent, findCommonOffsetParent and getOffsetRectRelativeToArbitraryNode.
+    - AC2: WHEN getReferenceOffsets completes normally, the popper-utils module SHALL return getOffsetRectRelativeToArbitraryNode(reference, commonOffsetParent, fixedPosition).
+    - AC3: WHEN getReferenceOffsets is invoked, the popper-utils module SHALL accept state, popper, reference and fixedPosition defaulting to null as input.
+  - Verdict: satisfied (evidence: judge-preserved)
+  - Reasoning: Behaviour judge (confidence: high) ruled the change behaviour-preserving: The getReferenceOffsets function implementation (both default-parameter and arguments-based variants) is unchanged between BEFORE and AFTER; differences are only in duplicated listing/truncation artifacts, not logic.
+  - Judge confidence: high
+  - Caveat: Static behavioural judgement of the before/after implementation, not an executed test.
+- **FR-get-root-993aae85**: WHEN a caller invokes getRoot, the popper-utils module SHALL return the root for the given node.
+  - Acceptance criteria:
+    - AC1: IF node.parentNode !== null, THEN the popper-utils module SHALL return getRoot(node.parentNode).
+    - AC2: WHEN getRoot completes normally, the popper-utils module SHALL return node.
+    - AC3: WHEN getRoot is invoked, the popper-utils module SHALL accept node as input.
+  - Verdict: satisfied (evidence: judge-preserved)
+  - Reasoning: Behaviour judge (confidence: high) ruled the change behaviour-preserving: getRoot's recursive logic (checking node.parentNode and recursing) is identical in BEFORE and AFTER across all file variants; only comment/line-range duplication differs.
+  - Judge confidence: high
+  - Caveat: Static behavioural judgement of the before/after implementation, not an executed test.
+- **FR-get-scroll-parent-a1f46264**: WHEN a caller invokes getScrollParent, the popper-utils module SHALL return the scroll parent for the given element.
+  - Acceptance criteria:
+    - AC1: IF !element, THEN the popper-utils module SHALL return document.body.
+    - AC2: IF /(auto|scroll|overlay)/.test(overflow + overflowY + overflowX), THEN the popper-utils module SHALL return element.
+    - AC3: WHEN getScrollParent runs, the popper-utils module SHALL call getStyleComputedProperty and getParentNode.
+    - AC4: WHEN getScrollParent completes normally, the popper-utils module SHALL return getScrollParent(getParentNode(element)).
+    - AC5: WHEN getScrollParent is invoked, the popper-utils module SHALL accept element as input.
+  - Verdict: satisfied (evidence: judge-preserved)
+  - Reasoning: Behaviour judge (confidence: high) ruled the change behaviour-preserving: The getScrollParent function implementation is byte-for-byte identical across all file variants in BEFORE and AFTER. The AFTER snippet shows duplicated copies of the same unchanged function plus an added 'isBrowser' variable declaration elsewhere, but the getScrollParent logic itself is untouched.
+  - Judge confidence: high
+  - Caveat: Static behavioural judgement of the before/after implementation, not an executed test.
+- **FR-get-scroll-629ec2ea**: WHEN a caller invokes getScroll, the popper-utils module SHALL return the scroll for the given element and side.
+  - Acceptance criteria:
+    - AC1: IF nodeName === 'BODY' || nodeName === 'HTML', THEN the popper-utils module SHALL return scrollingElement[upperSide].
+    - AC2: IF !(nodeName === 'BODY' || nodeName === 'HTML'), THEN the popper-utils module SHALL return element[upperSide].
+    - AC3: WHEN getScroll is invoked, the popper-utils module SHALL accept element and side defaulting to 'top' as input.
+  - Verdict: satisfied (evidence: judge-preserved)
+  - Reasoning: Behaviour judge (confidence: high) ruled the change behaviour-preserving: The getScroll function body is unchanged in all variants shown; AFTER duplicates the same logic (including a commented-out duplicate block) but the actual executable implementation is identical to BEFORE.
+  - Judge confidence: high
+  - Caveat: Static behavioural judgement of the before/after implementation, not an executed test.
+- **FR-get-size-c2289cab**: WHEN a caller invokes getSize, the popper-utils module SHALL return the size for the given axis, body, html and computed style.
+  - Acceptance criteria:
+    - AC1: WHEN getSize runs, the popper-utils module SHALL call isIE.
+    - AC2: WHEN getSize is invoked, the popper-utils module SHALL accept axis, body, html and computedStyle as input.
+  - Verdict: satisfied (evidence: judge-preserved)
+  - Reasoning: Behaviour judge (confidence: high) ruled the change behaviour-preserving: The getSize function logic (Math.max calculation with offset/scroll/client dimensions and IE10 margin adjustment) is identical between BEFORE and AFTER across all shown file variants; only duplicated/repeated snippets appear in AFTER, not logic changes.
+  - Judge confidence: high
+  - Caveat: Static behavioural judgement of the before/after implementation, not an executed test.
+- **FR-get-style-computed-prope-0a50c2d9**: WHEN a caller invokes getStyleComputedProperty, the popper-utils module SHALL return the style computed property for the given element and property.
+  - Acceptance criteria:
+    - AC1: IF element.nodeType !== 1, THEN the popper-utils module SHALL return [].
+    - AC2: WHEN getStyleComputedProperty completes normally, the popper-utils module SHALL return property ? css[property] : css.
+    - AC3: WHEN getStyleComputedProperty is invoked, the popper-utils module SHALL accept element and property as input.
+  - Verdict: satisfied (evidence: judge-preserved)
+  - Reasoning: Behaviour judge (confidence: high) ruled the change behaviour-preserving: The getStyleComputedProperty function body is byte-for-byte identical before and after across all file copies; only duplicated/truncated comment markers and extra repeated snippets appear in the AFTER text, which are artifacts of extraction, not code changes. The logic (nodeType check, getComputedStyle call, property lookup) is unchanged.
+  - Judge confidence: high
+  - Caveat: Static behavioural judgement of the before/after implementation, not an executed test.
+- **FR-get-supported-property-n-772f7961**: WHEN a caller invokes getSupportedPropertyName, the popper-utils module SHALL return the supported property name for the given property.
+  - Acceptance criteria:
+    - AC1: IF typeof document.body.style[toCheck] !== 'undefined', THEN the popper-utils module SHALL return toCheck.
+    - AC2: WHEN getSupportedPropertyName is invoked, the popper-utils module SHALL accept property as input.
+  - Verdict: satisfied (evidence: judge-preserved)
+  - Reasoning: Behaviour judge (confidence: high) ruled the change behaviour-preserving: getSupportedPropertyName's implementation (prefixes array, upperProp computation, loop checking document.body.style) is unchanged between BEFORE and AFTER. The AFTER listing shows the same function repeated with some duplicate/truncated snippet artifacts, but no functional difference is introduced.
+  - Judge confidence: high
+  - Caveat: Static behavioural judgement of the before/after implementation, not an executed test.
+- **FR-get-viewport-offset-rect-59b72e19**: WHEN a caller invokes getViewportOffsetRectRelativeToArtbitraryNode, the popper-utils module SHALL return the viewport offset rect relative to the arbitrary node.
+  - Acceptance criteria:
+    - AC1: WHEN getViewportOffsetRectRelativeToArtbitraryNode runs, the popper-utils module SHALL call getOffsetRectRelativeToArbitraryNode, getScroll and getClientRect.
+    - AC2: WHEN getViewportOffsetRectRelativeToArtbitraryNode completes normally, the popper-utils module SHALL return getClientRect(offset).
+    - AC3: WHEN getViewportOffsetRectRelativeToArtbitraryNode is invoked, the popper-utils module SHALL accept element and excludeScroll defaulting to false as input.
+  - Verdict: satisfied (evidence: judge-preserved)
+  - Reasoning: Behaviour judge (confidence: high) ruled the change behaviour-preserving: getViewportOffsetRectRelativeToArtbitraryNode retains identical logic (computing html offsets, scroll, width/height, and returning getClientRect(offset)) in both BEFORE and AFTER. Extra duplicated snippets in AFTER appear to be extraction artifacts rather than actual code changes.
+  - Judge confidence: high
+  - Caveat: Static behavioural judgement of the before/after implementation, not an executed test.
+- **FR-get-window-sizes-f0ac707b**: WHEN a caller invokes getWindowSizes, the popper-utils module SHALL return the window sizes.
+  - Acceptance criteria:
+    - AC1: WHEN getWindowSizes runs, the popper-utils module SHALL call isIE and getSize.
+    - AC2: WHEN getWindowSizes completes normally, the popper-utils module SHALL return { height: getSize('Height', body, html, computedStyle), width: getSize('Width', body, html, computedStyle) }.
+  - Verdict: satisfied (evidence: judge-preserved)
+  - Reasoning: Behaviour judge (confidence: high) ruled the change behaviour-preserving: The getWindowSizes function body is identical in BEFORE and AFTER across all file copies; the AFTER section only shows duplicated/repeated snippets of the same unchanged code with no logic changes.
+  - Judge confidence: high
+  - Caveat: Static behavioural judgement of the before/after implementation, not an executed test.
+- **FR-get-window-a7731a75**: WHEN a caller invokes getWindow, the popper-utils module SHALL return the window for the given element.
+  - Acceptance criteria:
+    - AC1: WHEN getWindow completes normally, the popper-utils module SHALL return ownerDocument ? ownerDocument.defaultView : window.
+    - AC2: WHEN getWindow is invoked, the popper-utils module SHALL accept element as input.
+  - Verdict: satisfied (evidence: judge-preserved)
+  - Reasoning: Behaviour judge (confidence: high) ruled the change behaviour-preserving: The getWindow function implementation (ownerDocument check and defaultView/window fallback) is unchanged between BEFORE and AFTER; only duplicate comment blocks and a stray '/**' artifact appear, which are cosmetic and do not alter behavior.
+  - Judge confidence: high
+  - Caveat: Static behavioural judgement of the before/after implementation, not an executed test.
+- **FR-handles-configuration-fo-89e56017**: WHEN a caller invokes setupEventListeners, the popper-utils module SHALL register the event listeners.
+  - Acceptance criteria:
+    - AC1: WHEN the resize event fires on getWindow(reference), the popper-utils module SHALL invoke state.updateBound.
+    - AC2: WHEN setupEventListeners runs, the popper-utils module SHALL call getWindow, getScrollParent and attachToScrollParents.
+    - AC3: WHEN setupEventListeners completes normally, the popper-utils module SHALL return state.
+    - AC4: WHEN setupEventListeners is invoked, the popper-utils module SHALL accept reference, options, state and updateBound as input.
+  - Verdict: satisfied (evidence: judge-preserved)
+  - Reasoning: Behaviour judge (confidence: high) ruled the change behaviour-preserving: The setupEventListeners function retains the same logic: binding resize listener on window and scroll listeners on scroll parents, returning updated state. AFTER shows repeated/duplicated code blocks (same content, different line ranges) but no functional change.
+  - Judge confidence: high
+  - Caveat: Static behavioural judgement of the before/after implementation, not an executed test.
+- **FR-handles-retrieval-for-ma-3f339016**: WHEN a caller invokes match, the findIndex SHALL determine whether the given item matches the specified criteria.
+  - Acceptance criteria:
+    - AC1: WHEN find completes normally, the findIndex SHALL return a value of type const match =.
+    - AC2: WHEN find is invoked, the findIndex SHALL accept arr and value of type obj => obj[prop] ===.
+  - Verdict: satisfied (evidence: judge-preserved)
+  - Reasoning: Behaviour judge (confidence: high) ruled the change behaviour-preserving: The AFTER code shows the same find(arr, obj => obj[prop] === value) logic across all file variants. Although the AFTER listing appears to have some duplicated/reordered snippets and one truncated entry, the core matching logic itself (find with the comparator) is unchanged everywhere it is shown intact.
+  - Judge confidence: high
+  - Caveat: Static behavioural judgement of the before/after implementation, not an executed test.
+- **FR-handles-retrieval-for-re-a6cc6494**: WHEN a caller invokes requesting, the isModifierRequired SHALL determine whether the modifier is required for the request.
+  - Acceptance criteria:
+    - AC1: WHEN find completes normally, the isModifierRequired SHALL return a value of type const requesting =.
+    - AC2: WHEN find is invoked, the isModifierRequired SHALL accept modifiers and requestingName of type ({ name }) => name ===.
+  - Verdict: satisfied (evidence: judge-preserved)
+  - Reasoning: Behaviour judge (confidence: high) ruled the change behaviour-preserving: The isModifierRequired-related 'requesting' lookup logic (find(modifiers, ({name}) => name === requestingName)) is identical in BEFORE and AFTER across all listed files and variants (both ES5 and ESM forms). No functional change is observed.
+  - Judge confidence: high
+  - Caveat: Static behavioural judgement of the before/after implementation, not an executed test.
+- **FR-handles-validation-for-i-efa34532**: WHEN a caller invokes isFunction, the popper-utils module SHALL report whether the given value is a function.
+  - Acceptance criteria:
+    - AC1: WHEN isFunction completes normally, the popper-utils module SHALL return functionToCheck && getType.toString.call(functionToCheck) === '[object Function]'.
+    - AC2: WHEN isFunction is invoked, the popper-utils module SHALL accept functionToCheck as input.
+  - Verdict: satisfied (evidence: judge-preserved)
+  - Reasoning: Behaviour judge (confidence: high) ruled the change behaviour-preserving: The isFunction implementation is unchanged across all files; it still checks functionToCheck && getType.toString.call(functionToCheck) === '[object Function]'. The AFTER snippet for eShopPorted/popper-utils.js shows an extra duplicate entry and a truncated comment artifact ('/**'), which looks like a doc comment addition/duplication rather than a functional change, with the core function body identical.
+  - Judge confidence: high
+  - Caveat: Static behavioural judgement of the before/after implementation, not an executed test.
+- **FR-remove-event-listeners-86aad6ae**: WHEN a caller invokes removeEventListeners, the popper-utils module SHALL remove the registered event listeners.
+  - Acceptance criteria:
+    - AC1: WHEN removeEventListeners runs, the popper-utils module SHALL call getWindow and forEach.
+    - AC2: WHEN removeEventListeners completes normally, the popper-utils module SHALL return state.
+    - AC3: WHEN removeEventListeners is invoked, the popper-utils module SHALL accept reference and state as input.
+  - Verdict: satisfied (evidence: judge-preserved)
+  - Reasoning: Behaviour judge (confidence: high) ruled the change behaviour-preserving: The removeEventListeners function body is identical in BEFORE and AFTER across all file instances; only line-number annotations/duplicated snippet references changed. Behaviour of removing resize/scroll listeners and resetting state is unchanged.
+  - Judge confidence: high
+  - Caveat: Static behavioural judgement of the before/after implementation, not an executed test.
+- **FR-run-modifiers-02847342**: WHEN a caller invokes runModifiers, the popper-utils module SHALL execute the modifiers in sequence.
+  - Acceptance criteria:
+    - AC1: WHEN runModifiers runs, the popper-utils module SHALL call findIndex, forEach, isFunction and getClientRect.
+    - AC2: WHEN runModifiers completes normally, the popper-utils module SHALL return data.
+    - AC3: WHEN runModifiers is invoked, the popper-utils module SHALL accept modifiers, data and ends as input.
+  - Verdict: satisfied (evidence: judge-preserved)
+  - Reasoning: Behaviour judge (confidence: high) ruled the change behaviour-preserving: The runModifiers function logic (slicing modifiers, iterating, checking enabled/fn, updating offsets, invoking fn) is identical between BEFORE and AFTER; differences are only in line ranges and duplicated snippet listings.
+  - Judge confidence: high
+  - Caveat: Static behavioural judgement of the before/after implementation, not an executed test.
+- **FR-handles-retrieval-for-pa-eb9a769d**: WHEN a caller invokes Page_Load, the About SHALL initialize the page on load.
+  - Acceptance criteria:
+    - AC1: WHEN Page_Load is invoked, the About SHALL accept sender of type object and e of type EventArgs.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-handles-retrieval-for-id-ad939189**: WHEN eShopPorted.Controllers.FilesController.BrandDTO.Id is used, the BrandDTO SHALL expose the id value as an int.
+  - Acceptance criteria:
+    - AC1: The BrandDTO SHALL expose Id as an int property with public get and set accessors.
+  - Verdict: satisfied (evidence: judge-preserved)
+  - Reasoning: Behaviour judge (confidence: high) ruled the change behaviour-preserving: The Id property remains 'public int Id { get; set; }' in all files; only minor line-number shifts occurred (e.g., CatalogBrand.cs line 10->9), consistent with unrelated code changes elsewhere in the file, not affecting behaviour.
+  - Judge confidence: high
+  - Caveat: Static behavioural judgement of the before/after implementation, not an executed test.
+- **FR-update-as-part-workflow-06ffd390**: WHEN a caller invokes update, the popper module SHALL recalculate and update the popper's position as part of the workflow.
+  - Acceptance criteria:
+    - AC1: IF this.state.isDestroyed, THEN the popper module SHALL stop without further processing.
+    - AC2: WHEN update runs, the popper module SHALL call getReferenceOffsets, computeAutoPlacement, getPopperOffsets, runModifiers and onCreate (+1 more).
+  - Verdict: satisfied (evidence: judge-preserved)
+  - Reasoning: Behaviour judge (confidence: high) ruled the change behaviour-preserving: The update() function implementation and its logic for recalculating popper position, running modifiers, and invoking onCreate/onUpdate callbacks are identical between BEFORE and AFTER across all file copies shown. No behavioural changes are evident.
+  - Judge confidence: high
+  - Caveat: Static behavioural judgement of the before/after implementation, not an executed test.
+- **FR-get-catalog-items-pagina-62186639**: WHEN a caller invokes GetCatalogItemsPaginated, the CatalogService SHALL return the catalog items paginated for the given page size and page index.
+  - Acceptance criteria:
+    - AC1: WHEN GetCatalogItemsPaginated completes normally, the CatalogService SHALL return new PaginatedItemsViewModel&lt;CatalogItem>( pageIndex, pageSize, totalItems, itemsOnPage).
+    - AC2: WHEN GetCatalogItemsPaginated is invoked, the CatalogService SHALL accept pageSize of type int and pageIndex of type int.
+  - Verdict: satisfied (evidence: judge-preserved)
+  - Reasoning: Behaviour judge (confidence: high) ruled the change behaviour-preserving: GetCatalogItemsPaginated implementations across CatalogService, CatalogServiceMock, and ICatalogService interfaces are unchanged between BEFORE and AFTER, preserving the same pagination logic (Skip/Take, ordering, totalItems calculation).
+  - Judge confidence: high
+  - Caveat: Static behavioural judgement of the before/after implementation, not an executed test.
+- **FR-handles-logging-for-cata-1ee3eaad**: WHEN eShopPorted.Models.CatalogItem.CatalogBrand is used, the CatalogItem SHALL expose the catalog brand value as a CatalogBrand.
+  - Acceptance criteria:
+    - AC1: The CatalogItem SHALL expose CatalogBrand as a CatalogBrand property with public get and set accessors.
+  - Verdict: satisfied (evidence: judge-preserved)
+  - Reasoning: Behaviour judge (confidence: high) ruled the change behaviour-preserving: The CatalogItem.CatalogBrand property and CreateCatalogBrand helper logic are unchanged between BEFORE and AFTER across all project variants; only line numbers shifted slightly in one file, which is cosmetic.
+  - Judge confidence: high
+  - Caveat: Static behavioural judgement of the before/after implementation, not an executed test.
+- **FR-handles-logging-for-cata-fa2ae893**: WHEN eShopPorted.Models.CatalogItem.CatalogType is used, the CatalogItem SHALL expose the catalog type value as a CatalogType.
+  - Acceptance criteria:
+    - AC1: The CatalogItem SHALL expose CatalogType as a CatalogType property with public get and set accessors.
+  - Verdict: satisfied (evidence: judge-preserved)
+  - Reasoning: Behaviour judge (confidence: high) ruled the change behaviour-preserving: The CatalogType property and CreateCatalogType logic are identical between BEFORE and AFTER across all projects; only line numbers shifted slightly in one file. No behavioural change observed.
+  - Judge confidence: high
+  - Caveat: Static behavioural judgement of the before/after implementation, not an executed test.
+- **FR-create-available-stock-ee3fb30f**: WHEN a caller invokes CreateAvailableStock, the CatalogService SHALL create the available stock.
+  - Acceptance criteria:
+    - AC1: WHEN CreateAvailableStock runs, the CatalogService SHALL save the changes via ents.SaveChanges() and add catalogItemsStock to ents.CatalogItemsStocks.
+    - AC2: WHEN CreateAvailableStock is invoked, the CatalogService SHALL accept catalogItemsStock of type CatalogItemsStock.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-get-available-stock-bdb268ad**: WHEN a caller invokes GetAvailableStock, the CatalogService SHALL return the available stock for the given date and catalog item id.
+  - Acceptance criteria:
+    - AC1: IF s != null, THEN the CatalogService SHALL return s.AvailableStock.
+    - AC2: IF s == null, THEN the CatalogService SHALL return 0.
+    - AC3: WHEN GetAvailableStock completes normally, the CatalogService SHALL return a value of type int.
+    - AC4: WHEN GetAvailableStock is invoked, the CatalogService SHALL accept date of type DateTime and catalogItemId of type int.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-get-catalog-items-1d2b85a9**: WHEN a caller invokes GetCatalogItems, the CatalogService SHALL return the catalog items for the given brand id filter and type id filter.
+  - Acceptance criteria:
+    - AC1: WHEN GetCatalogItems completes normally, the CatalogService SHALL return a value of type List&lt;CatalogItem>.
+    - AC2: WHEN GetCatalogItems is invoked, the CatalogService SHALL accept brandIdFilter of type int and typeIdFilter of type int.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-initialize-as-part-workf-caca75dc**: WHEN a caller creates a Deployer, the Deployer SHALL initialize the Deployer with the given subscription id, resource group and resource group location.
+  - Acceptance criteria:
+    - AC1: WHEN initialize is constructed, the Deployer SHALL accept subscription_id, resource_group and resource_group_location as input.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-apply-style-on-load-f3ea79a7**: WHEN a caller invokes applyStyleOnLoad, the popper module SHALL apply the style on load.
+  - Acceptance criteria:
+    - AC1: WHEN applyStyleOnLoad runs, the popper module SHALL call popper.setAttribute('x-placement', placement).
+    - AC2: WHEN applyStyleOnLoad runs, the popper module SHALL call getReferenceOffsets, computeAutoPlacement and setStyles.
+    - AC3: WHEN applyStyleOnLoad completes normally, the popper module SHALL return options.
+    - AC4: WHEN applyStyleOnLoad is invoked, the popper module SHALL accept reference, popper, options, modifierOptions and state as input.
+  - Verdict: satisfied (evidence: judge-preserved)
+  - Reasoning: Behaviour judge (confidence: high) ruled the change behaviour-preserving: The applyStyleOnLoad function body is unchanged across all listed files between BEFORE and AFTER; only duplicated/truncated listing order differs cosmetically.
+  - Judge confidence: high
+  - Caveat: Static behavioural judgement of the before/after implementation, not an executed test.
+- **FR-apply-style-1ded8db0**: WHEN a caller invokes applyStyle, the popper module SHALL apply the style.
+  - Acceptance criteria:
+    - AC1: WHEN applyStyle runs, the popper module SHALL call setStyles and setAttributes.
+    - AC2: WHEN applyStyle completes normally, the popper module SHALL return data.
+    - AC3: WHEN applyStyle is invoked, the popper module SHALL accept data as input.
+  - Verdict: satisfied (evidence: judge-preserved)
+  - Reasoning: Behaviour judge (confidence: high) ruled the change behaviour-preserving: The applyStyle function implementation is identical in BEFORE and AFTER across all files, with no logic changes, only reordering/duplication in the listing.
+  - Judge confidence: high
+  - Caveat: Static behavioural judgement of the before/after implementation, not an executed test.
+- **FR-compute-style-0785c34e**: WHEN a caller invokes computeStyle, the popper module SHALL compute the style.
+  - Acceptance criteria:
+    - AC1: WHEN computeStyle runs, the popper module SHALL call find, getOffsetParent, getBoundingClientRect and getSupportedPropertyName.
+    - AC2: WHEN computeStyle completes normally, the popper module SHALL return data.
+    - AC3: WHEN computeStyle is invoked, the popper module SHALL accept data and options as input.
+  - Verdict: satisfied (evidence: judge-preserved)
+  - Reasoning: Behaviour judge (confidence: high) ruled the change behaviour-preserving: The BEFORE and AFTER implementations of computeStyle across all file variants (popper.js, esm/popper.js) are byte-for-byte identical in logic: same gpuAcceleration legacy handling, same offset calculations, same styles/attributes assignment and return value. No behavioral change is introduced.
+  - Judge confidence: high
+  - Caveat: Static behavioural judgement of the before/after implementation, not an executed test.
+- **FR-get-offset-rect-8b23aad2**: WHEN a caller invokes getOffsetRect, the popper-utils module SHALL return the offset rect for the given element.
+  - Acceptance criteria:
+    - AC1: WHEN getOffsetRect runs, the popper-utils module SHALL call getWindowSizes and getClientRect.
+    - AC2: WHEN getOffsetRect completes normally, the popper-utils module SHALL return getClientRect(elementRect).
+    - AC3: WHEN getOffsetRect is invoked, the popper-utils module SHALL accept element as input.
+  - Verdict: satisfied (evidence: judge-preserved)
+  - Reasoning: Behaviour judge (confidence: high) ruled the change behaviour-preserving: The getOffsetRect function body is unchanged across all BEFORE and AFTER copies (same branching on nodeName === 'HTML', same elementRect construction, same getClientRect call and return). The only difference is an extra duplicated copy and a stray comment '/**' in AFTER's listing, which appears to be a truncation/formatting artifact in the extracted KB text rather than an actual code change affecting behavior.
+  - Judge confidence: high
+  - Caveat: Static behavioural judgement of the before/after implementation, not an executed test.
+- **FR-get-opposite-variation-18d9d32f**: WHEN a caller invokes getOppositeVariation, the popper module SHALL return the opposite variation for the given variation.
+  - Acceptance criteria:
+    - AC1: IF variation === 'end', THEN the popper module SHALL return 'start'.
+    - AC2: IF variation === 'start', THEN the popper module SHALL return 'end'.
+    - AC3: WHEN getOppositeVariation completes normally, the popper module SHALL return variation.
+    - AC4: WHEN getOppositeVariation is invoked, the popper module SHALL accept variation as input.
+  - Verdict: satisfied (evidence: judge-preserved)
+  - Reasoning: Behaviour judge (confidence: high) ruled the change behaviour-preserving: getOppositeVariation logic is identical in BEFORE and AFTER across all listed file copies: same 'end'/'start' swap logic and fallback return of the original variation. No functional change observed.
+  - Judge confidence: high
+  - Caveat: Static behavioural judgement of the before/after implementation, not an executed test.
+- **FR-handles-configuration-fo-e1cef0da**: WHEN a caller invokes arrow, the popper module SHALL perform arrow.
+  - Acceptance criteria:
+    - AC1: IF !isModifierRequired(data.instance.modifiers, 'arrow', 'keepTogether'), THEN the popper module SHALL return data.
+    - AC2: IF !arrowElement, THEN the popper module SHALL return data.
+    - AC3: IF !data.instance.popper.contains(arrowElement), THEN the popper module SHALL return data.
+    - AC4: WHEN arrow runs, the popper module SHALL call isModifierRequired, contains, indexOf, getOuterSizes and getClientRect (+1 more).
+    - AC5: WHEN arrow completes normally, the popper module SHALL return data.
+    - AC6: WHEN arrow is invoked, the popper module SHALL accept data and options as input.
+  - Verdict: satisfied (evidence: judge-preserved)
+  - Reasoning: Behaviour judge (confidence: high) ruled the change behaviour-preserving: The BEFORE and AFTER code for the arrow function in all popper.js variants (standard and ESM) are byte-for-byte identical in the shown snippets. No logic, parameter handling, or output computation has changed.
+  - Judge confidence: high
+  - Caveat: Static behavioural judgement of the before/after implementation, not an executed test.
+- **FR-handles-configuration-fo-09735721**: WHEN a caller invokes flip, the popper module SHALL perform flip.
+  - Acceptance criteria:
+    - AC1: IF isModifierEnabled(data.instance.modifiers, 'inner'), THEN the popper module SHALL return data.
+    - AC2: IF data.flipped && data.placement === data.originalPlacement, THEN the popper module SHALL return data.
+    - AC3: WHEN flip runs, the popper module SHALL call isModifierEnabled, getBoundaries, getOppositePlacement, clockwise and forEach (+4 more).
+    - AC4: WHEN flip completes normally, the popper module SHALL return data.
+    - AC5: WHEN flip is invoked, the popper module SHALL accept data and options as input.
+  - Verdict: satisfied (evidence: judge-preserved)
+  - Reasoning: Behaviour judge (confidence: high) ruled the change behaviour-preserving: The BEFORE and AFTER code for the flip function across popper.js and esm/popper.js variants are identical, including the modifier checks, boundary calculations, flip order logic, and placement recalculation. No behavioral differences are present.
+  - Judge confidence: high
+  - Caveat: Static behavioural judgement of the before/after implementation, not an executed test.
+- **FR-handles-configuration-fo-0cb260e4**: WHEN a caller invokes preventOverflow, the popper module SHALL perform preventOverflow.
+  - Acceptance criteria:
+    - AC1: WHEN preventOverflow runs, the popper module SHALL call getOffsetParent, getSupportedPropertyName, getBoundaries, forEach and indexOf.
+    - AC2: WHEN preventOverflow completes normally, the popper module SHALL return data.
+    - AC3: WHEN preventOverflow is invoked, the popper module SHALL accept data and options as input.
+  - Verdict: satisfied (evidence: judge-preserved)
+  - Reasoning: Behaviour judge (confidence: high) ruled the change behaviour-preserving: The BEFORE and AFTER code for preventOverflow in both the standard and ESM popper.js files are identical, including boundary element resolution, style reset/restore logic, and the primary/secondary check functions. No behavioral change is evident.
+  - Judge confidence: high
+  - Caveat: Static behavioural judgement of the before/after implementation, not an executed test.
+- **FR-handles-retrieval-for-di-a5053a2f**: WHEN a caller invokes divider, the parseOffset SHALL perform divider.
+  - Acceptance criteria:
+    - AC1: WHEN indexOf completes normally, the parseOffset SHALL return a value of type const divider = fragments..
+  - Verdict: satisfied (evidence: judge-preserved)
+  - Reasoning: Behaviour judge (confidence: high) ruled the change behaviour-preserving: The BEFORE and AFTER code for the divider computation in popper.js across all listed files is byte-for-byte identical. No change in logic, regex, or control flow.
+  - Judge confidence: high
+  - Caveat: Static behavioural judgement of the before/after implementation, not an executed test.
+- **FR-handles-retrieval-for-i-1144c753**: WHEN eShopLegacyWebForms._Default.ICatalogService is used, the _Default SHALL expose the catalog service value as an ICatalogService.
+  - Acceptance criteria:
+    - AC1: The _Default SHALL expose CatalogService as an ICatalogService property with public get and set accessors.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-handles-retrieval-for-ke-5ef70956**: WHEN a caller invokes keepTogether, the popper module SHALL perform keepTogether.
+  - Acceptance criteria:
+    - AC1: WHEN keepTogether runs, the popper module SHALL call indexOf.
+    - AC2: WHEN keepTogether completes normally, the popper module SHALL return data.
+    - AC3: WHEN keepTogether is invoked, the popper module SHALL accept data as input.
+  - Verdict: satisfied (evidence: judge-preserved)
+  - Reasoning: Behaviour judge (confidence: high) ruled the change behaviour-preserving: The keepTogether function implementation is identical in BEFORE and AFTER across all solution variants (both ES6 and ESM transpiled versions). No behavioral change observed.
+  - Judge confidence: high
+  - Caveat: Static behavioural judgement of the before/after implementation, not an executed test.
+- **FR-parse-offset-9ddb420a**: WHEN a caller invokes parseOffset, the popper module SHALL parse the offset.
+  - Acceptance criteria:
+    - AC1: WHEN parseOffset runs, the popper module SHALL call indexOf, trim, find, toValue and forEach (+1 more).
+    - AC2: WHEN parseOffset completes normally, the popper module SHALL return offsets.
+    - AC3: WHEN parseOffset is invoked, the popper module SHALL accept offset, popperOffsets, referenceOffsets and basePlacement as input.
+  - Verdict: satisfied (evidence: judge-preserved)
+  - Reasoning: Behaviour judge (confidence: high) ruled the change behaviour-preserving: The parseOffset function body, including offset parsing, splitting logic, operator aggregation, and unit conversion, is unchanged between BEFORE and AFTER across all file variants shown (truncated but matching up to the truncation point).
+  - Judge confidence: high
+  - Caveat: Static behavioural judgement of the before/after implementation, not an executed test.
+- **FR-handles-logging-for-cata-0070e7ab**: WHEN eShopPorted.Models.CatalogItem.CatalogBrandId is used, the CatalogItem SHALL expose the catalog brand id value as an int.
+  - Acceptance criteria:
+    - AC1: The CatalogItem SHALL expose CatalogBrandId as an int property with public get and set accessors.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-handles-logging-for-cata-d469e8f4**: WHEN eShopPorted.Models.CatalogItem.CatalogTypeId is used, the CatalogItem SHALL expose the catalog type id value as an int.
+  - Acceptance criteria:
+    - AC1: The CatalogItem SHALL expose CatalogTypeId as an int property with public get and set accessors.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-provide-catalog-item-cap-30a659f6**: WHEN a caller invokes an operation of CatalogItem, the CatalogItem SHALL hold the Id, Name, Description, Price and PictureFileName (+9 more) values.
+  - Acceptance criteria:
+    - AC1: The CatalogItem SHALL expose the properties Id, Name, Description, Price and PictureFileName (+9 more).
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-handles-logging-for-cata-319f72e3**: WHEN a caller creates a CatalogServiceMock, the CatalogServiceMock SHALL initialize the CatalogServiceMock.
+  - Acceptance criteria:
+    - AC1: WHEN CatalogServiceMock is constructed, the CatalogServiceMock SHALL call GetPreconfiguredCatalogItems.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-handles-logging-for-comp-83fa00c3**: WHEN a caller invokes ComposeCatalogItems, the CatalogServiceMock SHALL perform ComposeCatalogItems.
+  - Acceptance criteria:
+    - AC1: WHEN ComposeCatalogItems runs, the CatalogServiceMock SHALL call GetPreconfiguredCatalogTypes and GetPreconfiguredCatalogBrands.
+    - AC2: WHEN ComposeCatalogItems completes normally, the CatalogServiceMock SHALL return items.
+    - AC3: WHEN ComposeCatalogItems is invoked, the CatalogServiceMock SHALL accept items of type List&lt;CatalogItem>.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-provide-catalog-service-e60b7c8a**: WHEN a caller invokes an operation of CatalogServiceMock, the CatalogServiceMock SHALL provide the operations GetCatalogItemsPaginated, CatalogItem, GetCatalogTypes, GetCatalogBrands and CreateCatalogItem (+4 more).
+  - Acceptance criteria:
+    - AC1: The CatalogServiceMock SHALL implement ICatalogService.
+    - AC2: The CatalogServiceMock SHALL expose the operations GetCatalogItemsPaginated, CatalogItem, GetCatalogTypes, GetCatalogBrands and CreateCatalogItem (+4 more).
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-add-handler-6551590d**: WHEN a caller invokes addHandler, the EventHandlerList SHALL persist the handler.
+  - Acceptance criteria:
+    - AC1: WHEN addHandler is invoked, the EventHandlerList SHALL accept b and a as input.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-add-property-changed-e5f300b2**: WHEN a caller invokes addPropertyChanged, the Observer SHALL register the provided property-changed callback so it is invoked when a property changes.
+  - Acceptance criteria:
+    - AC1: The Observer SHALL provide addPropertyChanged on the class itself, not on its instances.
+    - AC2: WHEN addPropertyChanged is invoked, the Observer SHALL accept b and a as input.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-build-url-image-1f6c66d3**: WHEN a caller invokes BuildUrlImage, the IImageService SHALL construct and return the full image URL from the provided image name.
+  - Acceptance criteria:
+    - AC1: IF string.IsNullOrEmpty(item.PictureFileName), THEN the IImageService SHALL return UrlDefaultImage().
+    - AC2: WHEN BuildUrlImage runs, the IImageService SHALL call UrlDefaultImage.
+    - AC3: WHEN BuildUrlImage completes normally, the IImageService SHALL return _storageAccount.BlobStorageUri.PrimaryUri + "pics/" + item.Id + "/" + item.PictureFileName.
+    - AC4: WHEN BuildUrlImage is invoked, the IImageService SHALL accept item of type CatalogItem.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-create-as-part-workflow-1b8aaf8f**: WHEN a caller invokes create, the Error SHALL create and return a new error instance.
+  - Acceptance criteria:
+    - AC1: The Error SHALL provide create on the class itself, not on its instances.
+    - AC2: WHEN create is invoked, the Error SHALL accept d and b as input.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-filter-changed-690b245f**: WHEN a caller invokes filterChanged, the CatalogController SHALL apply the updated filter criteria and refresh the catalog results.
+  - Acceptance criteria:
+    - AC1: WHEN filterChanged runs, the CatalogController SHALL call LoadCatalogItems.
+    - AC2: WHEN filterChanged is invoked, the CatalogController SHALL accept view of type ICatalogView and e of type FilterEventArgs.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-handles-data-processing-b0d0036f**: WHEN a caller invokes format, the Error SHALL format the error message into a displayable string.
+  - Acceptance criteria:
+    - AC1: The Error SHALL provide format on the class itself, not on its instances.
+    - AC2: WHEN format is invoked, the Error SHALL accept a as input.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-handles-persistence-for-06339942**: WHEN eShopWCFService.Models.CatalogBrand.Id is used, the CatalogBrand SHALL expose the id value as an int.
+  - Acceptance criteria:
+    - AC1: The CatalogBrand SHALL expose Id as an int property with public get and set accessors.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-remove-handler-b26ec23c**: WHEN a caller invokes removeHandler, the EventHandlerList SHALL remove the specified event handler from the list.
+  - Acceptance criteria:
+    - AC1: WHEN removeHandler is invoked, the EventHandlerList SHALL accept b and a as input.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-remove-property-changed-50f55395**: WHEN a caller invokes removePropertyChanged, the Observer SHALL unregister the specified property-changed callback.
+  - Acceptance criteria:
+    - AC1: The Observer SHALL provide removePropertyChanged on the class itself, not on its instances.
+    - AC2: WHEN removePropertyChanged is invoked, the Observer SHALL accept b and a as input.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-update-image-bf737a36**: WHEN a caller invokes UpdateImage, the IImageService SHALL update the stored image with the provided image data.
+  - Acceptance criteria:
+    - AC1: WHEN UpdateImage runs, the IImageService SHALL call GetFileName.
+    - AC2: WHEN UpdateImage is invoked, the IImageService SHALL accept item of type CatalogItem.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-upload-temp-image-1d4aa98b**: WHEN a caller invokes UploadTempImage, the IImageService SHALL upload the provided image data to temporary storage and return its reference.
+  - Acceptance criteria:
+    - AC1: WHEN UploadTempImage runs, the IImageService SHALL call ToString.
+    - AC2: WHEN UploadTempImage completes normally, the IImageService SHALL return blockBlob.Uri.ToString().
+    - AC3: WHEN UploadTempImage is invoked, the IImageService SHALL accept file of type HttpPostedFile and catalogItemId of type int?.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-handles-calculation-for-9ee2a21b**: WHEN a caller creates a PaginatedItemsViewModel, the PaginatedItemsViewModel SHALL initialize its ActualPage, ItemsPerPage, TotalItems, and Data properties with the given page index, page size, count, and data.
+  - Acceptance criteria:
+    - AC1: WHEN PaginatedItemsViewModel is constructed, the PaginatedItemsViewModel SHALL accept pageIndex of type int, pageSize of type int, count of type long and data of type IEnumerable&lt;TEntity>.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-handles-communication-fo-0e646bc2**: WHEN eShopPorted.Models.CatalogItem.AvailableStock is used, the CatalogItem SHALL expose the available stock value as an int.
+  - Acceptance criteria:
+    - AC1: The CatalogItem SHALL expose AvailableStock as an int property with public get and set accessors.
+    - AC2: IF AvailableStock is set and is outside 0 to 10000000, THEN the CatalogItem SHALL reject it as invalid ([Range(0, 10000000, ErrorMessage = "The field Stock must be between 0 and 10 million.")]) with the message "The field Stock must be between 0 and 10 million.".
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-handles-communication-fo-238c2dea**: WHEN eShopPorted.Models.CatalogItem.MaxStockThreshold is used, the CatalogItem SHALL expose the max stock threshold value as an int.
+  - Acceptance criteria:
+    - AC1: The CatalogItem SHALL expose MaxStockThreshold as an int property with public get and set accessors.
+    - AC2: IF MaxStockThreshold is set and is outside 0 to 10000000, THEN the CatalogItem SHALL reject it as invalid ([Range(0, 10000000, ErrorMessage = "The field Max stock must be between 0 and 10 million.")]) with the message "The field Max stock must be between 0 and 10 million.".
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-handles-communication-fo-e64626c3**: WHEN eShopPorted.Models.CatalogItem.Price is used, the CatalogItem SHALL expose the price value as a decimal.
+  - Acceptance criteria:
+    - AC1: The CatalogItem SHALL expose Price as a decimal property with public get and set accessors.
+    - AC2: IF Price is set and does not match @"^\d+(\.\d{0,2})*$", THEN the CatalogItem SHALL reject it as invalid ([RegularExpression(@"^\d+(\.\d{0,2})*$", ErrorMessage = "The field Price must be a positive number with maximum two decimals.")]) with the message "The field Price must be a positive number with maximum two decimals.".
+    - AC3: IF Price is set and is outside 0 to 1000000, THEN the CatalogItem SHALL reject it as invalid ([Range(0, 1000000)]).
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-handles-communication-fo-bb539034**: WHEN eShopPorted.Models.CatalogItem.RestockThreshold is used, the CatalogItem SHALL expose the restock threshold value as an int.
+  - Acceptance criteria:
+    - AC1: The CatalogItem SHALL expose RestockThreshold as an int property with public get and set accessors.
+    - AC2: IF RestockThreshold is set and is outside 0 to 10000000, THEN the CatalogItem SHALL reject it as invalid ([Range(0, 10000000, ErrorMessage = "The field Restock must be between 0 and 10 million.")]) with the message "The field Restock must be between 0 and 10 million.".
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-handles-retrieval-for-ac-2fce4859**: WHEN eShopPorted.ViewModel.PaginatedItemsViewModel.ActualPage is used, the PaginatedItemsViewModel SHALL expose the actual page value as an int.
+  - Acceptance criteria:
+    - AC1: The PaginatedItemsViewModel SHALL expose ActualPage as an int property with a public get accessor and a private set accessor.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-handles-retrieval-for-da-ff4834b3**: WHEN eShopPorted.ViewModel.PaginatedItemsViewModel.Data is used, the PaginatedItemsViewModel SHALL expose the data value as an IEnumerable&lt;TEntity>.
+  - Acceptance criteria:
+    - AC1: The PaginatedItemsViewModel SHALL expose Data as an IEnumerable&lt;TEntity> property with a public get accessor and a private set accessor.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-handles-retrieval-for-de-9782de16**: WHEN eShopPorted.Models.CatalogItem.Description is used, the CatalogItem SHALL expose the description value as a string.
+  - Acceptance criteria:
+    - AC1: The CatalogItem SHALL expose Description as a string property with public get and set accessors.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-handles-retrieval-for-it-f5a477db**: WHEN eShopPorted.ViewModel.PaginatedItemsViewModel.ItemsPerPage is used, the PaginatedItemsViewModel SHALL expose the items per page value as an int.
+  - Acceptance criteria:
+    - AC1: The PaginatedItemsViewModel SHALL expose ItemsPerPage as an int property with a public get accessor and a private set accessor.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-handles-retrieval-for-on-43509049**: WHEN eShopPorted.Models.CatalogItem.OnReorder is used, the CatalogItem SHALL expose the on reorder value as a bool.
+  - Acceptance criteria:
+    - AC1: The CatalogItem SHALL expose OnReorder as a bool property with public get and set accessors.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-handles-retrieval-for-pi-54b66e34**: WHEN eShopPorted.Models.CatalogItem.PictureUri is used, the CatalogItem SHALL expose the picture uri value as a string.
+  - Acceptance criteria:
+    - AC1: The CatalogItem SHALL expose PictureUri as a string property with public get and set accessors.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-handles-retrieval-for-to-211dd446**: WHEN eShopPorted.ViewModel.PaginatedItemsViewModel.TotalItems is used, the PaginatedItemsViewModel SHALL expose the total items value as a long.
+  - Acceptance criteria:
+    - AC1: The PaginatedItemsViewModel SHALL expose TotalItems as a long property with a public get accessor and a private set accessor.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-handles-retrieval-for-to-5340c87e**: WHEN eShopPorted.ViewModel.PaginatedItemsViewModel.TotalPages is used, the PaginatedItemsViewModel SHALL expose the total pages value as an int.
+  - Acceptance criteria:
+    - AC1: The PaginatedItemsViewModel SHALL expose TotalPages as an int property with public get and set accessors.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-provide-paginated-items-09a02aa3**: WHEN a caller invokes an operation of PaginatedItemsViewModel, the PaginatedItemsViewModel SHALL hold and expose the ActualPage, ItemsPerPage, TotalItems, TotalPages, and Data values.
+  - Acceptance criteria:
+    - AC1: The PaginatedItemsViewModel SHALL expose the properties ActualPage, ItemsPerPage, TotalItems, TotalPages and Data.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-add-as-part-workflow-f3438cfd**: WHEN a caller invokes add, the Observer SHALL add the given item to the observer's collection.
+  - Acceptance criteria:
+    - AC1: The Observer SHALL provide add on the class itself, not on its instances.
+    - AC2: WHEN add is invoked, the Observer SHALL accept a and b as input.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-add-collection-changed-3fb95fbf**: WHEN a caller invokes addCollectionChanged, the Observer SHALL register the provided collection-changed callback so it is invoked when the collection changes.
+  - Acceptance criteria:
+    - AC1: The Observer SHALL provide addCollectionChanged on the class itself, not on its instances.
+    - AC2: WHEN addCollectionChanged is invoked, the Observer SHALL accept b and a as input.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-add-completed-request-b5dc119b**: WHEN a caller invokes add_completedRequest, the _WebRequestManager SHALL register the provided completed-request event handler so it is invoked when the request completes.
+  - Acceptance criteria:
+    - AC1: WHEN add_completedRequest is invoked, the _WebRequestManager SHALL accept a as input.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-add-completed-46af7597**: WHEN a caller invokes add_completed, the WebRequest SHALL register the provided completed event handler so it is invoked when the request completes.
+  - Acceptance criteria:
+    - AC1: WHEN add_completed is invoked, the WebRequest SHALL accept a as input.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-add-component-8059dcec**: WHEN a caller invokes addComponent, the _Application SHALL persist the component.
+  - Acceptance criteria:
+    - AC1: WHEN addComponent is invoked, the _Application SHALL accept a as input.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-add-css-class-431faab5**: WHEN a caller invokes addCssClass, the DomElement SHALL persist the css class.
+  - Acceptance criteria:
+    - AC1: The DomElement SHALL provide addCssClass on the class itself, not on its instances.
+    - AC2: WHEN addCssClass is invoked, the DomElement SHALL accept a and b as input.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-add-disposing-0385af8b**: WHEN a caller invokes add_disposing, the Component SHALL persist the disposing.
+  - Acceptance criteria:
+    - AC1: WHEN add_disposing is invoked, the Component SHALL accept a as input.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-add-event-handler-6f4acf4e**: WHEN a caller invokes addEventHandler, the Observer SHALL persist the event handler.
+  - Acceptance criteria:
+    - AC1: The Observer SHALL provide addEventHandler on the class itself, not on its instances.
+    - AC2: WHEN addEventHandler is invoked, the Observer SHALL accept c, a and b as input.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-add-history-point-b458506e**: WHEN a caller invokes addHistoryPoint, the _Application SHALL persist the history point.
+  - Acceptance criteria:
+    - AC1: WHEN addHistoryPoint is invoked, the _Application SHALL accept c and f as input.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-add-init-42c704b7**: WHEN a caller invokes add_init, the _Application SHALL persist the init.
+  - Acceptance criteria:
+    - AC1: WHEN add_init is invoked, the _Application SHALL accept a as input.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-add-invoking-request-d5eefa37**: WHEN a caller invokes add_invokingRequest, the _WebRequestManager SHALL persist the invoking request.
+  - Acceptance criteria:
+    - AC1: WHEN add_invokingRequest is invoked, the _WebRequestManager SHALL accept a as input.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-add-load-a471527a**: WHEN a caller invokes add_load, the _Application SHALL persist the load.
+  - Acceptance criteria:
+    - AC1: WHEN add_load is invoked, the _Application SHALL accept a as input.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-add-navigate-48af5729**: WHEN a caller invokes add_navigate, the _Application SHALL persist the navigate.
+  - Acceptance criteria:
+    - AC1: WHEN add_navigate is invoked, the _Application SHALL accept a as input.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-add-range-adfdf211**: WHEN a caller invokes addRange, the Array SHALL persist the range.
+  - Acceptance criteria:
+    - AC1: The Array SHALL provide addRange on the class itself, not on its instances.
+    - AC2: WHEN addRange is invoked, the Array SHALL accept a and b as input.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-add-unload-5cf8dee7**: WHEN a caller invokes add_unload, the _Application SHALL persist the unload.
+  - Acceptance criteria:
+    - AC1: WHEN add_unload is invoked, the _Application SHALL accept a as input.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-cancel-event-args-9b4ed200**: WHEN a caller invokes CancelEventArgs, the Sys SHALL cancel the event args.
+  - Acceptance criteria:
+    - AC1: The Sys SHALL provide CancelEventArgs on the class itself, not on its instances.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-clear-as-part-workflow-184b22bf**: WHEN a caller invokes clear, the Array SHALL clear the a.
+  - Acceptance criteria:
+    - AC1: The Array SHALL provide clear on the class itself, not on its instances.
+    - AC2: WHEN clear is invoked, the Array SHALL accept a as input.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-create-available-stock-a-33c92c2b**: WHEN a caller invokes CreateAvailableStockAsync, the ICatalogService SHALL create the available stock async.
+  - Acceptance criteria:
+    - AC1: WHEN CreateAvailableStockAsync completes normally, the ICatalogService SHALL return base.Channel.CreateAvailableStockAsync(catalogItemsStock).
+    - AC2: WHEN CreateAvailableStockAsync is invoked, the ICatalogService SHALL accept catalogItemsStock of type eShopWinForms.eShopServiceReference.CatalogItemsStock.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-create-callback-d734c0a3**: WHEN a caller invokes createCallback, the Function SHALL create the callback.
+  - Acceptance criteria:
+    - AC1: The Function SHALL provide createCallback on the class itself, not on its instances.
+    - AC2: WHEN createCallback is invoked, the Function SHALL accept b and a as input.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-create-catalog-item-asyn-23030f5c**: WHEN a caller invokes CreateCatalogItemAsync, the ICatalogService SHALL create the catalog item async.
+  - Acceptance criteria:
+    - AC1: WHEN CreateCatalogItemAsync completes normally, the ICatalogService SHALL return base.Channel.CreateCatalogItemAsync(catalogItem).
+    - AC2: WHEN CreateCatalogItemAsync is invoked, the ICatalogService SHALL accept catalogItem of type eShopWinForms.eShopServiceReference.CatalogItem.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-create-delegate-35b63342**: WHEN a caller invokes createDelegate, the Function SHALL create the delegate.
+  - Acceptance criteria:
+    - AC1: The Function SHALL provide createDelegate on the class itself, not on its instances.
+    - AC2: WHEN createDelegate is invoked, the Function SHALL accept a and b as input.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-find-catalog-item-async-7e06b3a0**: WHEN a caller invokes FindCatalogItemAsync, the ICatalogService SHALL return the catalog item async for the given id.
+  - Acceptance criteria:
+    - AC1: WHEN FindCatalogItemAsync completes normally, the ICatalogService SHALL return base.Channel.FindCatalogItemAsync(id).
+    - AC2: WHEN FindCatalogItemAsync is invoked, the ICatalogService SHALL accept id of type int.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-find-catalog-item-f0186085**: WHEN a caller invokes FindCatalogItem, the ICatalogService SHALL return the catalog item for the given id.
+  - Acceptance criteria:
+    - AC1: WHEN FindCatalogItem completes normally, the ICatalogService SHALL return base.Channel.FindCatalogItem(id).
+    - AC2: WHEN FindCatalogItem is invoked, the ICatalogService SHALL accept id of type int.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-find-component-8e6bf483**: WHEN a caller invokes findComponent, the _Application SHALL return the component for the given b and a.
+  - Acceptance criteria:
+    - AC1: WHEN findComponent is invoked, the _Application SHALL accept b and a as input.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-get-available-stock-asyn-482b59d4**: WHEN a caller invokes GetAvailableStockAsync, the ICatalogService SHALL return the available stock async for the given date and catalog item id.
+  - Acceptance criteria:
+    - AC1: WHEN GetAvailableStockAsync completes normally, the ICatalogService SHALL return base.Channel.GetAvailableStockAsync(date, catalogItemId).
+    - AC2: WHEN GetAvailableStockAsync is invoked, the ICatalogService SHALL accept date of type System.DateTime and catalogItemId of type int.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-get-base-method-5a0d8356**: WHEN a caller invokes getBaseMethod, the Type SHALL return the base method for the given a and b.
+  - Acceptance criteria:
+    - AC1: WHEN getBaseMethod is invoked, the Type SHALL accept a and b as input.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-get-behavior-name-b0c092b1**: WHEN a caller invokes getBehaviorByName, the Behavior SHALL return the behavior for the given name.
+  - Acceptance criteria:
+    - AC1: The Behavior SHALL provide getBehaviorByName on the class itself, not on its instances.
+    - AC2: WHEN getBehaviorByName is invoked, the Behavior SHALL accept b and c as input.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-get-behaviors-type-e3331fb8**: WHEN a caller invokes getBehaviorsByType, the Behavior SHALL return the behaviors for the given type.
+  - Acceptance criteria:
+    - AC1: The Behavior SHALL provide getBehaviorsByType on the class itself, not on its instances.
+    - AC2: WHEN getBehaviorsByType is invoked, the Behavior SHALL accept d and e as input.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-get-behaviors-a8be87a6**: WHEN a caller invokes getBehaviors, the Behavior SHALL return the behaviors for the given a.
+  - Acceptance criteria:
+    - AC1: The Behavior SHALL provide getBehaviors on the class itself, not on its instances.
+    - AC2: WHEN getBehaviors is invoked, the Behavior SHALL accept a as input.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-get-bounds-82b15584**: WHEN a caller invokes getBounds, the DomElement SHALL return the bounds for the given a.
+  - Acceptance criteria:
+    - AC1: The DomElement SHALL provide getBounds on the class itself, not on its instances.
+    - AC2: WHEN getBounds is invoked, the DomElement SHALL accept a as input.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-get-brands-350769a6**: WHEN a caller invokes GetBrands, the Create SHALL return the brands.
+  - Acceptance criteria:
+    - AC1: WHEN GetBrands runs, the Create SHALL call GetCatalogBrands.
+    - AC2: WHEN GetBrands completes normally, the Create SHALL return CatalogService.GetCatalogBrands().
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-get-catalog-brands-async-b9a6eac1**: WHEN a caller invokes GetCatalogBrandsAsync, the ICatalogService SHALL return the catalog brands async.
+  - Acceptance criteria:
+    - AC1: WHEN GetCatalogBrandsAsync completes normally, the ICatalogService SHALL return base.Channel.GetCatalogBrandsAsync().
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-get-catalog-items-async-fa1349e3**: WHEN a caller invokes GetCatalogItemsAsync, the ICatalogService SHALL return the catalog items async for the given brand id filter and type id filter.
+  - Acceptance criteria:
+    - AC1: WHEN GetCatalogItemsAsync completes normally, the ICatalogService SHALL return base.Channel.GetCatalogItemsAsync(brandIdFilter, typeIdFilter).
+    - AC2: WHEN GetCatalogItemsAsync is invoked, the ICatalogService SHALL accept brandIdFilter of type System.Nullable&lt;int> and typeIdFilter of type System.Nullable&lt;int>.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-get-catalog-types-async-ff1c08d5**: WHEN a caller invokes GetCatalogTypesAsync, the ICatalogService SHALL return the catalog types async.
+  - Acceptance criteria:
+    - AC1: WHEN GetCatalogTypesAsync completes normally, the ICatalogService SHALL return base.Channel.GetCatalogTypesAsync().
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-get-discount-async-daedc22d**: WHEN a caller invokes GetDiscountAsync, the ICatalogService SHALL return the discount async for the given day.
+  - Acceptance criteria:
+    - AC1: WHEN GetDiscountAsync completes normally, the ICatalogService SHALL return base.Channel.GetDiscountAsync(day).
+    - AC2: WHEN GetDiscountAsync is invoked, the ICatalogService SHALL accept day of type System.DateTime.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-get-discount-dff991e9**: WHEN a caller invokes GetDiscount, the ICatalogService SHALL return the discount for the given day.
+  - Acceptance criteria:
+    - AC1: WHEN GetDiscount completes normally, the ICatalogService SHALL return base.Channel.GetDiscount(day).
+    - AC2: WHEN GetDiscount is invoked, the ICatalogService SHALL accept day of type System.DateTime.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-get-handler-dfa8621b**: WHEN a caller invokes getHandler, the EventHandlerList SHALL return the handler for the given b.
+  - Acceptance criteria:
+    - AC1: WHEN getHandler is invoked, the EventHandlerList SHALL accept b as input.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-get-location-206ff26b**: WHEN a caller invokes getLocation, the DomElement SHALL return the location for the given d.
+  - Acceptance criteria:
+    - AC1: The DomElement SHALL provide getLocation on the class itself, not on its instances.
+    - AC2: WHEN getLocation is invoked, the DomElement SHALL accept d as input.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-get-root-namespaces-1c4f007f**: WHEN a caller invokes getRootNamespaces, the Type SHALL return the root namespaces.
+  - Acceptance criteria:
+    - AC1: The Type SHALL provide getRootNamespaces on the class itself, not on its instances.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-get-type-name-1173d6f6**: WHEN a caller invokes getTypeName, the Object SHALL return the type name for the given a.
+  - Acceptance criteria:
+    - AC1: The Object SHALL provide getTypeName on the class itself, not on its instances.
+    - AC2: WHEN getTypeName is invoked, the Object SHALL accept a as input.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-get-type-53f3b461**: WHEN a caller invokes getType, the Object SHALL return the type for the given b.
+  - Acceptance criteria:
+    - AC1: The Object SHALL provide getType on the class itself, not on its instances.
+    - AC2: WHEN getType is invoked, the Object SHALL accept b as input.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-get-types-b8289da0**: WHEN a caller invokes GetTypes, the Create SHALL return the types.
+  - Acceptance criteria:
+    - AC1: WHEN GetTypes runs, the Create SHALL call GetCatalogTypes.
+    - AC2: WHEN GetTypes completes normally, the Create SHALL return CatalogService.GetCatalogTypes().
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-get-visibility-mode-9c7d3696**: WHEN a caller invokes getVisibilityMode, the DomElement SHALL return the visibility mode for the given a.
+  - Acceptance criteria:
+    - AC1: The DomElement SHALL provide getVisibilityMode on the class itself, not on its instances.
+    - AC2: WHEN getVisibilityMode is invoked, the DomElement SHALL accept a as input.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-get-visible-0077c06b**: WHEN a caller invokes getVisible, the DomElement SHALL return the visible for the given b.
+  - Acceptance criteria:
+    - AC1: The DomElement SHALL provide getVisible on the class itself, not on its instances.
+    - AC2: WHEN getVisible is invoked, the DomElement SHALL accept b as input.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-handles-calculation-for-6f79db11**: WHEN a caller invokes DiscountItem, the ICatalogService SHALL apply a discount to the specified item.
+  - Acceptance criteria:
+    - AC1: WHEN GetDiscount completes normally, the ICatalogService SHALL return a value of type DiscountItem.
+    - AC2: WHEN GetDiscount is invoked, the ICatalogService SHALL accept day of type DateTime.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-handles-calculation-for-dcd7a1a7**: WHEN a caller invokes parameterCount, the Error SHALL return the parameter count.
+  - Acceptance criteria:
+    - AC1: The Error SHALL provide parameterCount on the class itself, not on its instances.
+    - AC2: WHEN parameterCount is invoked, the Error SHALL accept a as input.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-handles-calculation-for-592d2362**: WHEN a caller invokes SetCatalogItems, the ICatalogView SHALL set the catalog items.
+  - Acceptance criteria:
+    - AC1: WHEN SetCatalogItems runs, the ICatalogView SHALL add thumb to catalogItemDataGridView.Rows.
+    - AC2: WHEN SetCatalogItems runs, the ICatalogView SHALL call ToString.
+    - AC3: WHEN SetCatalogItems is invoked, the ICatalogView SHALL accept items of type IEnumerable&lt;CatalogItem> and discountVal of type double.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-handles-calculation-for-69f6ae6a**: WHEN a caller invokes SetDiscountBanner, the ICatalogView SHALL set the discount banner.
+  - Acceptance criteria:
+    - AC1: WHEN SetDiscountBanner is invoked, the ICatalogView SHALL accept bannerText of type String.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-handles-communication-fo-d2a14119**: WHEN a caller invokes INotifyDisposing, the Sys SHALL notify registered listeners that the object is being disposed.
+  - Acceptance criteria:
+    - AC1: The Sys SHALL provide INotifyDisposing on the class itself, not on its instances.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-handles-communication-fo-2f11507f**: WHEN a caller invokes INotifyPropertyChange, the Sys SHALL notify registered listeners that a property value has changed.
+  - Acceptance criteria:
+    - AC1: The Sys SHALL provide INotifyPropertyChange on the class itself, not on its instances.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-handles-configuration-fo-2f01ed66**: WHEN a caller invokes set_jsonpCallbackParameter, the WebServiceProxy SHALL set the JSONP callback parameter name used for cross-domain requests.
+  - Acceptance criteria:
+    - AC1: WHEN set_jsonpCallbackParameter is invoked, the WebServiceProxy SHALL accept a as input.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-handles-data-processing-2ba5f7d3**: WHEN a caller invokes localeFormat, the Date SHALL format the date value according to the current locale's formatting rules.
+  - Acceptance criteria:
+    - AC1: WHEN localeFormat is invoked, the Date SHALL accept a as input.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-handles-logging-for-cata-2c68d177**: WHEN eShopWCFService.CatalogItemsStock.CatalogItemId is used, the CatalogItemsStock SHALL expose the catalog item id value as an int.
+  - Acceptance criteria:
+    - AC1: The CatalogItemsStock SHALL expose CatalogItemId as an int property with public get and set accessors.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-handles-logging-for-set-daaaa2fb**: WHEN a caller invokes SetController, the ICatalogView SHALL assign the specified controller instance to the view.
+  - Acceptance criteria:
+    - AC1: WHEN SetController runs, the ICatalogView SHALL store controller in _controller.
+    - AC2: WHEN SetController is invoked, the ICatalogView SHALL accept controller of type CatalogController.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-handles-logging-for-set-96795c7f**: WHEN a caller invokes SetShipmentView, the ICatalogView SHALL assign the specified shipment view to the catalog view.
+  - Acceptance criteria:
+    - AC1: WHEN SetShipmentView runs, the ICatalogView SHALL add String.Format("{0} - {1}", catalogItem.Id, catalogItem.Name) to listBox1.Items and add catalogItem.Id to productIdInput.Items.
+    - AC2: WHEN SetShipmentView is invoked, the ICatalogView SHALL accept items of type IEnumerable&lt;CatalogItem>.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-handles-logging-for-trac-48ad9a21**: WHEN a caller invokes traceDump, the _Debug SHALL output a dump of the specified object's contents to the trace listener.
+  - Acceptance criteria:
+    - AC1: WHEN traceDump is invoked, the _Debug SHALL accept a and b as input.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-handles-logging-for-trac-9bb2bebf**: WHEN a caller invokes trace, the _Debug SHALL output the specified message to the trace listener.
+  - Acceptance criteria:
+    - AC1: WHEN trace is invoked, the _Debug SHALL accept a as input.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-handles-retrieval-for-ap-8ac153d5**: WHEN a caller invokes ApplicationLoadEventArgs, the Sys SHALL construct and return an event arguments object describing the application load event.
+  - Acceptance criteria:
+    - AC1: The Sys SHALL provide ApplicationLoadEventArgs on the class itself, not on its instances.
+    - AC2: WHEN ApplicationLoadEventArgs is invoked, the Sys SHALL accept b and a as input.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-handles-retrieval-for-di-d30814b8**: WHEN a caller invokes DiscountItem, the CatalogService SHALL return all discount items.
+  - Acceptance criteria:
+    - AC1: WHEN GetDiscount completes normally, the CatalogService SHALL return a value of type DiscountItem.
+    - AC2: WHEN GetDiscount is invoked, the CatalogService SHALL accept _day of type DateTime.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-handles-retrieval-for-sh-4c0fff1b**: WHEN a caller invokes ShowStockAvailability, the ICatalogView SHALL display the stock availability information in the view.
+  - Acceptance criteria:
+    - AC1: WHEN ShowStockAvailability runs, the ICatalogView SHALL add args.itemId.ToString() to lvi.SubItems, add availability.ToString() to lvi.SubItems and add lvi to listView1.Items.
+    - AC2: WHEN ShowStockAvailability runs, the ICatalogView SHALL call ToString.
+    - AC3: WHEN ShowStockAvailability is invoked, the ICatalogView SHALL accept args of type SearchStockEventArgs and stock of type int.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-handles-retrieval-for-sy-1d559981**: WHEN a caller invokes Sys$Component$_setProperties, the MicrosoftAjax module SHALL apply the specified property values to the component instance.
+  - Acceptance criteria:
+    - AC1: WHEN Sys$Component$_setProperties is invoked, the MicrosoftAjax module SHALL accept a and i as input.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-handles-retrieval-for-sy-6c258cef**: WHEN a caller invokes Sys$Component$_setReferences, the MicrosoftAjax module SHALL resolve and assign the specified element references to the component instance.
+  - Acceptance criteria:
+    - AC1: WHEN Sys$Component$_setReferences is invoked, the MicrosoftAjax module SHALL accept c and b as input.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-initialize-base-60e10198**: WHEN a caller invokes initializeBase, the Type SHALL invoke the base class constructor logic for the specified instance.
+  - Acceptance criteria:
+    - AC1: WHEN initializeBase is invoked, the Type SHALL accept a and b as input.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-insert-as-part-workflow-11d2317a**: WHEN a caller invokes insert, the Array SHALL insert the specified element at the given index within the array.
+  - Acceptance criteria:
+    - AC1: The Array SHALL provide insert on the class itself, not on its instances.
+    - AC2: WHEN insert is invoked, the Array SHALL accept a, b and c as input.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-notify-collection-change-efb00586**: WHEN a caller invokes NotifyCollectionChangedAction, the Sys SHALL expose the enumeration value identifying the type of collection change action.
+  - Acceptance criteria:
+    - AC1: The Sys SHALL provide NotifyCollectionChangedAction on the class itself, not on its instances.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-notify-collection-change-f8fedb20**: WHEN a caller invokes NotifyCollectionChangedEventArgs, the Sys SHALL construct and return an event arguments object describing the collection change.
+  - Acceptance criteria:
+    - AC1: The Sys SHALL provide NotifyCollectionChangedEventArgs on the class itself, not on its instances.
+    - AC2: WHEN NotifyCollectionChangedEventArgs is invoked, the Sys SHALL accept a as input.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-parse-data-processing-9a0623fe**: WHEN a caller invokes parse, the Boolean SHALL parse the specified string value into a boolean.
+  - Acceptance criteria:
+    - AC1: The Boolean SHALL provide parse on the class itself, not on its instances.
+    - AC2: WHEN parse is invoked, the Boolean SHALL accept b as input.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-parse-invariant-7f8bb6ad**: WHEN a caller invokes parseInvariant, the Date SHALL parse the specified string into a date using invariant culture formatting rules.
+  - Acceptance criteria:
+    - AC1: The Date SHALL provide parseInvariant on the class itself, not on its instances.
+    - AC2: WHEN parseInvariant is invoked, the Date SHALL accept a as input.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-parse-locale-caa7bc03**: WHEN a caller invokes parseLocale, the Date SHALL parse the specified string into a date using the current locale's formatting rules.
+  - Acceptance criteria:
+    - AC1: The Date SHALL provide parseLocale on the class itself, not on its instances.
+    - AC2: WHEN parseLocale is invoked, the Date SHALL accept a as input.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-provide-catalog-items-st-2e1540d7**: WHEN a caller invokes an operation of CatalogItemsStock, the CatalogItemsStock SHALL hold the Date, CatalogItemId, AvailableStock and StockId values.
+  - Acceptance criteria:
+    - AC1: The CatalogItemsStock SHALL expose the properties Date, CatalogItemId, AvailableStock and StockId.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-provide-catalog-service-5d2a5bd5**: WHEN a caller invokes an operation of CatalogServiceClient, the CatalogServiceClient SHALL provide the operations CreateAvailableStock, CreateCatalogItem, CatalogItem, GetAvailableStock and GetCatalogBrands (+4 more).
+  - Acceptance criteria:
+    - AC1: The CatalogServiceClient SHALL implement ICatalogService.
+    - AC2: The CatalogServiceClient SHALL expose the operations CreateAvailableStock, CreateCatalogItem, CatalogItem, GetAvailableStock and GetCatalogBrands (+4 more).
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-provide-catalog-view-cap-7887973f**: WHEN a caller invokes an operation of CatalogView, the CatalogView SHALL provide the operations Dispose and InitializeComponent.
+  - Acceptance criteria:
+    - AC1: The CatalogView SHALL expose the operations Dispose and InitializeComponent.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-provide-create-capabilit-ef8b4815**: WHEN a caller invokes an operation of Create, the Create SHALL provide the operations Page_Load, GetBrands, GetTypes and Create_Click.
+  - Acceptance criteria:
+    - AC1: The Create SHALL expose the operations Page_Load, GetBrands, GetTypes and Create_Click.
+    - AC2: The Create SHALL expose the property CatalogService.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-provide-delete-capabilit-776ca0d0**: WHEN a caller invokes an operation of Delete, the Delete SHALL provide the operations Page_Load and Delete_Click.
+  - Acceptance criteria:
+    - AC1: The Delete SHALL expose the operations Page_Load and Delete_Click.
+    - AC2: The Delete SHALL expose the property CatalogService.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-provide-details-capabili-a257f471**: WHEN a caller invokes an operation of Details, the Details SHALL provide the operation Page_Load.
+  - Acceptance criteria:
+    - AC1: The Details SHALL expose the operation Page_Load.
+    - AC2: The Details SHALL expose the property CatalogService.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-provide-discount-item-ca-cae66c0a**: WHEN a caller invokes an operation of DiscountItem, the DiscountItem SHALL hold the Size, End and Id values.
+  - Acceptance criteria:
+    - AC1: The DiscountItem SHALL expose the properties Size, End and Id.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-provide-edit-capability-94235548**: WHEN a caller invokes an operation of Edit, the Edit SHALL provide the operations Page_Load, GetBrands, GetTypes and Save_Click.
+  - Acceptance criteria:
+    - AC1: The Edit SHALL expose the operations Page_Load, GetBrands, GetTypes and Save_Click.
+    - AC2: The Edit SHALL expose the property CatalogService.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-provide-site-master-capa-1985cb7d**: WHEN a caller invokes an operation of SiteMaster, the SiteMaster SHALL provide the operation Page_Load.
+  - Acceptance criteria:
+    - AC1: The SiteMaster SHALL expose the operation Page_Load.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-provide-site-mobile-capa-6b3d9a39**: WHEN a caller invokes an operation of Site_Mobile, the Site_Mobile SHALL provide the operation Page_Load.
+  - Acceptance criteria:
+    - AC1: The Site_Mobile SHALL expose the operation Page_Load.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-provide-view-switcher-ca-1d432e66**: WHEN a caller invokes an operation of ViewSwitcher, the ViewSwitcher SHALL provide the operation Page_Load.
+  - Acceptance criteria:
+    - AC1: The ViewSwitcher SHALL expose the operation Page_Load.
+    - AC2: The ViewSwitcher SHALL expose the properties CurrentView, AlternateView and SwitchUrl.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-register-class-e27ff98c**: WHEN a caller invokes registerClass, the Type SHALL register the class.
+  - Acceptance criteria:
+    - AC1: WHEN registerClass is invoked, the Type SHALL accept c, b and d as input.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-register-disposable-obje-0663000c**: WHEN a caller invokes registerDisposableObject, the _Application SHALL register the disposable object.
+  - Acceptance criteria:
+    - AC1: WHEN registerDisposableObject is invoked, the _Application SHALL accept b as input.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-register-enum-42d3d1f7**: WHEN a caller invokes registerEnum, the Type SHALL register the enum.
+  - Acceptance criteria:
+    - AC1: WHEN registerEnum is invoked, the Type SHALL accept b and c as input.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-register-interface-994eeb5d**: WHEN a caller invokes registerInterface, the Type SHALL register the interface.
+  - Acceptance criteria:
+    - AC1: WHEN registerInterface is invoked, the Type SHALL accept a as input.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-register-namespace-f5ce27f8**: WHEN a caller invokes registerNamespace, the Type SHALL register the namespace.
+  - Acceptance criteria:
+    - AC1: The Type SHALL provide registerNamespace on the class itself, not on its instances.
+    - AC2: WHEN registerNamespace is invoked, the Type SHALL accept e as input.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-remove-as-part-workflow-73df0f05**: WHEN a caller invokes remove, the Array SHALL remove the specified element from the array.
+  - Acceptance criteria:
+    - AC1: The Array SHALL provide remove on the class itself, not on its instances.
+    - AC2: WHEN remove is invoked, the Array SHALL accept b and c as input.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-remove-at-2d815110**: WHEN a caller invokes removeAt, the Array SHALL remove the element at the specified index.
+  - Acceptance criteria:
+    - AC1: The Array SHALL provide removeAt on the class itself, not on its instances.
+    - AC2: WHEN removeAt is invoked, the Array SHALL accept a and b as input.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-remove-catalog-item-asyn-38eeeddb**: WHEN a caller invokes RemoveCatalogItemAsync, the ICatalogService SHALL delete the specified catalog item asynchronously.
+  - Acceptance criteria:
+    - AC1: WHEN RemoveCatalogItemAsync completes normally, the ICatalogService SHALL return base.Channel.RemoveCatalogItemAsync(catalogItem).
+    - AC2: WHEN RemoveCatalogItemAsync is invoked, the ICatalogService SHALL accept catalogItem of type eShopWinForms.eShopServiceReference.CatalogItem.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-remove-collection-change-95e462bb**: WHEN a caller invokes removeCollectionChanged, the Observer SHALL remove the collection changed event subscription.
+  - Acceptance criteria:
+    - AC1: The Observer SHALL provide removeCollectionChanged on the class itself, not on its instances.
+    - AC2: WHEN removeCollectionChanged is invoked, the Observer SHALL accept b and a as input.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-remove-completed-request-d87dba7c**: WHEN a caller invokes remove_completedRequest, the _WebRequestManager SHALL remove the completed request event subscription.
+  - Acceptance criteria:
+    - AC1: WHEN remove_completedRequest is invoked, the _WebRequestManager SHALL accept a as input.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-remove-completed-d8850aa0**: WHEN a caller invokes remove_completed, the WebRequest SHALL remove the completed event subscription.
+  - Acceptance criteria:
+    - AC1: WHEN remove_completed is invoked, the WebRequest SHALL accept a as input.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-remove-component-dcfe7456**: WHEN a caller invokes removeComponent, the _Application SHALL remove the specified component.
+  - Acceptance criteria:
+    - AC1: WHEN removeComponent is invoked, the _Application SHALL accept b as input.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-remove-css-class-df8f2e8a**: WHEN a caller invokes removeCssClass, the DomElement SHALL remove the specified CSS class from the element.
+  - Acceptance criteria:
+    - AC1: The DomElement SHALL provide removeCssClass on the class itself, not on its instances.
+    - AC2: WHEN removeCssClass is invoked, the DomElement SHALL accept d and c as input.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-remove-disposing-af1bbe72**: WHEN a caller invokes remove_disposing, the Component SHALL remove the disposing event subscription.
+  - Acceptance criteria:
+    - AC1: WHEN remove_disposing is invoked, the Component SHALL accept a as input.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-remove-event-handler-0f431091**: WHEN a caller invokes removeEventHandler, the Observer SHALL remove the specified event handler.
+  - Acceptance criteria:
+    - AC1: The Observer SHALL provide removeEventHandler on the class itself, not on its instances.
+    - AC2: WHEN removeEventHandler is invoked, the Observer SHALL accept c, a and b as input.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-remove-init-c6b4286e**: WHEN a caller invokes remove_init, the _Application SHALL remove the init event subscription.
+  - Acceptance criteria:
+    - AC1: WHEN remove_init is invoked, the _Application SHALL accept a as input.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-remove-invoking-request-9d38965c**: WHEN a caller invokes remove_invokingRequest, the _WebRequestManager SHALL remove the invoking request event subscription.
+  - Acceptance criteria:
+    - AC1: WHEN remove_invokingRequest is invoked, the _WebRequestManager SHALL accept a as input.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-remove-load-33f491d9**: WHEN a caller invokes remove_load, the _Application SHALL remove the load event subscription.
+  - Acceptance criteria:
+    - AC1: WHEN remove_load is invoked, the _Application SHALL accept a as input.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-remove-navigate-0c265e8a**: WHEN a caller invokes remove_navigate, the _Application SHALL remove the navigate event subscription.
+  - Acceptance criteria:
+    - AC1: WHEN remove_navigate is invoked, the _Application SHALL accept a as input.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-remove-unload-3307c005**: WHEN a caller invokes remove_unload, the _Application SHALL remove the unload event subscription.
+  - Acceptance criteria:
+    - AC1: WHEN remove_unload is invoked, the _Application SHALL accept a as input.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-resolve-element-d543528c**: WHEN a caller invokes resolveElement, the DomElement SHALL resolve and return the specified element.
+  - Acceptance criteria:
+    - AC1: The DomElement SHALL provide resolveElement on the class itself, not on its instances.
+    - AC2: WHEN resolveElement is invoked, the DomElement SHALL accept b and c as input.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-serialize-as-part-workfl-e1283d95**: WHEN a caller invokes serialize, the JavaScriptSerializer SHALL serialize the specified object to a JSON string.
+  - Acceptance criteria:
+    - AC1: The JavaScriptSerializer SHALL provide serialize on the class itself, not on its instances.
+    - AC2: WHEN serialize is invoked, the JavaScriptSerializer SHALL accept b as input.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-update-catalog-item-asyn-b828a281**: WHEN a caller invokes UpdateCatalogItemAsync, the ICatalogService SHALL update the specified catalog item asynchronously.
+  - Acceptance criteria:
+    - AC1: WHEN UpdateCatalogItemAsync completes normally, the ICatalogService SHALL return base.Channel.UpdateCatalogItemAsync(catalogItem).
+    - AC2: WHEN UpdateCatalogItemAsync is invoked, the ICatalogService SHALL accept catalogItem of type eShopWinForms.eShopServiceReference.CatalogItem.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-validate-parameters-ee91866a**: WHEN a caller invokes validateParameters, the Function SHALL validate the provided parameters.
+  - Acceptance criteria:
+    - AC1: The Function SHALL provide validateParameters on the class itself, not on its instances.
+    - AC2: WHEN validateParameters is invoked, the Function SHALL accept c, b and a as input.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-handles-authentication-f-c6f331b3**: WHEN a caller invokes login, the _AuthenticationService SHALL authenticate the specified credentials and log the user in.
+  - Acceptance criteria:
+    - AC1: WHEN login is invoked, the _AuthenticationService SHALL accept c, b, a, h and f (+3 more) as input.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-handles-retrieval-for-i-fd2923e8**: WHEN eShopModernizedWebForms._Default.IImageService is used, the _Default SHALL expose the image service value as an IImageService.
+  - Acceptance criteria:
+    - AC1: The _Default SHALL expose ImageService as an IImageService property with public get and set accessors.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-add-availability-button-a7951bed**: WHEN a caller invokes addAvailabilityButton_Click, the CatalogView SHALL persist the availability button click.
+  - Acceptance criteria:
+    - AC1: WHEN addAvailabilityButton_Click is invoked, the CatalogView SHALL accept sender of type object and e of type EventArgs.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-add-availability-b9441cac**: WHEN a caller invokes addAvailability, the CatalogController SHALL create the shipment.
+  - Acceptance criteria:
+    - AC1: WHEN addAvailability runs, the CatalogController SHALL call _service.CreateAvailableStock(shipment).
+    - AC2: WHEN addAvailability runs, the CatalogController SHALL call NotifyAvailabilityUpdated.
+    - AC3: WHEN addAvailability is invoked, the CatalogController SHALL accept view of type ICatalogView and e of type AvailabilityEventArgs.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-add-begin-request-877d0373**: WHEN a caller invokes add_beginRequest, the PageRequestManager SHALL persist the begin request.
+  - Acceptance criteria:
+    - AC1: WHEN add_beginRequest is invoked, the PageRequestManager SHALL accept a as input.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-add-catalog-items-stock-c1abee50**: WHEN a caller invokes AddCatalogItemsStock, the CatalogDBInitializer SHALL save the changes.
+  - Acceptance criteria:
+    - AC1: WHEN AddCatalogItemsStock runs, the CatalogDBInitializer SHALL add s to context.CatalogItemsStocks and save the changes via context.SaveChanges().
+    - AC2: WHEN AddCatalogItemsStock runs, the CatalogDBInitializer SHALL call GetPreconfiguredCatalogItemsStock.
+    - AC3: WHEN AddCatalogItemsStock is invoked, the CatalogDBInitializer SHALL accept context of type EntityModel.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-add-discount-items-9dab017d**: WHEN a caller invokes AddDiscountItems, the CatalogDBInitializer SHALL save the changes.
+  - Acceptance criteria:
+    - AC1: WHEN AddDiscountItems runs, the CatalogDBInitializer SHALL add discount to context.DiscountItems and save the changes via context.SaveChanges().
+    - AC2: WHEN AddDiscountItems runs, the CatalogDBInitializer SHALL call GetPreconfiguredDiscountItems.
+    - AC3: WHEN AddDiscountItems is invoked, the CatalogDBInitializer SHALL accept context of type EntityModel.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-add-end-request-b4b78286**: WHEN a caller invokes add_endRequest, the PageRequestManager SHALL persist the end request.
+  - Acceptance criteria:
+    - AC1: WHEN add_endRequest is invoked, the PageRequestManager SHALL accept a as input.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-add-initialize-request-4553fe7b**: WHEN a caller invokes add_initializeRequest, the PageRequestManager SHALL persist the initialize request.
+  - Acceptance criteria:
+    - AC1: WHEN add_initializeRequest is invoked, the PageRequestManager SHALL accept a as input.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-add-page-loaded-a7d4c6ef**: WHEN a caller invokes add_pageLoaded, the PageRequestManager SHALL persist the page loaded.
+  - Acceptance criteria:
+    - AC1: WHEN add_pageLoaded is invoked, the PageRequestManager SHALL accept a as input.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-add-page-loading-985ab16f**: WHEN a caller invokes add_pageLoading, the PageRequestManager SHALL persist the page loading.
+  - Acceptance criteria:
+    - AC1: WHEN add_pageLoading is invoked, the PageRequestManager SHALL accept a as input.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-apply-up-9989fbac**: WHEN a caller invokes applyUp, the MenuItem SHALL apply the up.
+  - Acceptance criteria:
+    - AC1: WHEN applyUp completes normally, the MenuItem SHALL return lastMenuItem.
+    - AC2: WHEN applyUp is invoked, the MenuItem SHALL accept fn and condition as input.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-check-discounts-fc1ab746**: WHEN a caller invokes CheckForDiscounts, the CatalogController SHALL check for discounts.
+  - Acceptance criteria:
+    - AC1: WHEN CheckForDiscounts runs, the CatalogController SHALL call GetDiscount, ToString and SetDiscountBanner.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-create-click-88768f7f**: WHEN a caller invokes Create_Click, the Create SHALL create the click.
+  - Acceptance criteria:
+    - AC1: WHEN Create_Click runs, the Create SHALL call CatalogService.CreateCatalogItem(catalogItem).
+    - AC2: WHEN Create_Click is invoked, the Create SHALL accept sender of type object and e of type EventArgs.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-create-property-string-f-1992c403**: WHEN a caller invokes createPropertyStringFromValues_DetailsView, the DetailsView module SHALL create the property string from values details view.
+  - Acceptance criteria:
+    - AC1: WHEN createPropertyStringFromValues_DetailsView completes normally, the DetailsView module SHALL return value.join("|").
+    - AC2: WHEN createPropertyStringFromValues_DetailsView is invoked, the DetailsView module SHALL accept pageIndex and dataKeys as input.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-create-property-string-f-3ab526c5**: WHEN a caller invokes createPropertyStringFromValues_GridView, the GridView module SHALL create the property string from values grid view.
+  - Acceptance criteria:
+    - AC1: WHEN createPropertyStringFromValues_GridView completes normally, the GridView module SHALL return value.join("|").
+    - AC2: WHEN createPropertyStringFromValues_GridView is invoked, the GridView module SHALL accept pageIndex, sortDirection, sortExpression and dataKeys as input.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-delete-click-600136e9**: WHEN a caller invokes Delete_Click, the Delete SHALL delete the product to delete.
+  - Acceptance criteria:
+    - AC1: WHEN Delete_Click runs, the Delete SHALL call CatalogService.RemoveCatalogItem(productToDelete).
+    - AC2: WHEN Delete_Click is invoked, the Delete SHALL accept sender of type object and e of type EventArgs.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-deploy-template-9519125b**: WHEN a caller invokes DeployTemplate, the DeploymentHelper SHALL deploy the template.
+  - Acceptance criteria:
+    - AC1: WHEN DeployTemplate is invoked, the DeploymentHelper SHALL accept resourceManagementClient of type ResourceManagementClient, resourceGroupName of type string, deploymentName of type string, templateFileContents of type JObject and parameterFileContents of type JObject.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-ensure-resource-group-ex-5e52e1a0**: WHEN a caller invokes EnsureResourceGroupExists, the DeploymentHelper SHALL ensure the resource group exists.
+  - Acceptance criteria:
+    - AC1: WHEN EnsureResourceGroupExists is invoked, the DeploymentHelper SHALL accept resourceManagementClient of type ResourceManagementClient, resourceGroupName of type string and resourceGroupLocation of type string.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-filter-event-args-edf69a23**: WHEN a caller creates a FilterEventArgs, the FilterEventArgs SHALL initialize the FilterEventArgs with the given type id and brand id.
+  - Acceptance criteria:
+    - AC1: WHEN FilterEventArgs is constructed, the FilterEventArgs SHALL accept typeId of type int and brandId of type int.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-get-base-url-images-dfbf60ad**: WHEN a caller invokes GetBaseUrlImages, the ImageMockStorage SHALL return the base url images.
+  - Acceptance criteria:
+    - AC1: WHEN GetBaseUrlImages completes normally, the ImageMockStorage SHALL return "/Pics/".
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-get-displayed-37a3e4e4**: WHEN a caller invokes get_displayed, the Menu SHALL return the displayed.
+  - Acceptance criteria:
+    - AC1: WHEN get_displayed completes normally, the Menu SHALL return this.element.style.display !== 'none'.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-get-focused-a65832ee**: WHEN a caller invokes get_focused, the Menu SHALL return the focused.
+  - Acceptance criteria:
+    - AC1: IF this.container, THEN the Menu SHALL return this.container.focused.
+    - AC2: WHEN get_focused completes normally, the Menu SHALL return false.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-get-full-year-dfb95553**: WHEN a caller invokes GetFullYear, the ValidatorConvert SHALL return the full year for the given year.
+  - Acceptance criteria:
+    - AC1: WHEN GetFullYear completes normally, the ValidatorConvert SHALL return ((year > twoDigitCutoffYear) ? (cutoffYearCentury - 100 + year) : (cutoffYearCentury + year)).
+    - AC2: WHEN GetFullYear is invoked, the ValidatorConvert SHALL accept year as input.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-get-highlighted-67ef5973**: WHEN a caller invokes get_highlighted, the MenuItem SHALL return the highlighted.
+  - Acceptance criteria:
+    - AC1: WHEN get_highlighted completes normally, the MenuItem SHALL return /(^|\s)highlighted(\s|$)/.test(this._anchor.className).
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-get-instance-cfe74926**: WHEN a caller invokes getInstance, the _ScriptLoader SHALL return the instance.
+  - Acceptance criteria:
+    - AC1: The _ScriptLoader SHALL provide getInstance on the class itself, not on its instances.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-get-preconfigured-catalo-9412c49c**: WHEN a caller invokes GetPreconfiguredCatalogItemsStock, the PreconfiguredData SHALL return all preconfigured catalog items stocks.
+  - Acceptance criteria:
+    - AC1: WHEN GetPreconfiguredCatalogItemsStock completes normally, the PreconfiguredData SHALL return a value of type IEnumerable&lt;CatalogItemsStock>.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-get-preconfigured-discou-c90cfebc**: WHEN a caller invokes GetPreconfiguredDiscountItems, the PreconfiguredData SHALL return all preconfigured discount items.
+  - Acceptance criteria:
+    - AC1: WHEN GetPreconfiguredDiscountItems runs, the PreconfiguredData SHALL call DiscountItem.
+    - AC2: WHEN GetPreconfiguredDiscountItems completes normally, the PreconfiguredData SHALL return a value of type IEnumerable&lt;DiscountItem>.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-get-tab-index-ae284b7c**: WHEN a caller invokes getTabIndex, the MenuItem SHALL return the tab index.
+  - Acceptance criteria:
+    - AC1: WHEN getTabIndex completes normally, the MenuItem SHALL return this._anchor.tabIndex.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-handle-key-press-f30a711c**: WHEN a caller invokes handleKeyPress, the Menu SHALL handle the key press.
+  - Acceptance criteria:
+    - AC1: IF this.container.focusedMenuItem, THEN the Menu SHALL stop without further processing.
+    - AC2: WHEN handleKeyPress runs, the Menu SHALL call contains, navigate, firstChild and navigateTo.
+    - AC3: WHEN handleKeyPress is invoked, the Menu SHALL accept keyCode as input.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-handles-authentication-f-6b76d70d**: WHEN a caller creates an AuthenticationMiddleware, the AuthenticationMiddleware SHALL initialize the AuthenticationMiddleware with the given next.
+  - Acceptance criteria:
+    - AC1: WHEN AuthenticationMiddleware is constructed, the AuthenticationMiddleware SHALL accept next of type OwinMiddleware.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-handles-authentication-f-9444afde**: WHEN a caller invokes ConfigureAuth, the Startup SHALL perform ConfigureAuth.
+  - Acceptance criteria:
+    - AC1: WHEN ConfigureAuth is invoked, the Startup SHALL accept app of type IAppBuilder.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-handles-authentication-f-98d9de6b**: WHEN a caller invokes set_defaultLoginCompletedCallback, the _AuthenticationService SHALL set the default login completed callback.
+  - Acceptance criteria:
+    - AC1: WHEN set_defaultLoginCompletedCallback is invoked, the _AuthenticationService SHALL accept a as input.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-handles-authorization-fo-0f4cf0a0**: WHEN a caller invokes isUserInRole, the _RoleService SHALL report whether it is user in role.
+  - Acceptance criteria:
+    - AC1: WHEN isUserInRole is invoked, the _RoleService SHALL accept a as input.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-handles-calculation-for-413048e8**: WHEN a caller invokes ValidationSummaryOnSubmit, the WebUIValidation module SHALL validate the form on submit and display the validation summary.
+  - Acceptance criteria:
+    - AC1: IF typeof(Page_ValidationSummaries) == "undefined", THEN the WebUIValidation module SHALL stop without further processing.
+    - AC2: WHEN ValidationSummaryOnSubmit runs, the WebUIValidation module SHALL set summary.style.display to "none", set summary.style.display to "" and set summary.innerHTML to s.
+    - AC3: WHEN ValidationSummaryOnSubmit runs, the WebUIValidation module SHALL call IsValidationGroupMatch.
+    - AC4: WHEN ValidationSummaryOnSubmit is invoked, the WebUIValidation module SHALL accept validationGroup as input.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-handles-communication-fo-e4c840ce**: WHEN a caller invokes Application_Error, the MvcApplication SHALL handle the unhandled application error.
+  - Acceptance criteria:
+    - AC1: WHEN Application_Error is invoked, the MvcApplication SHALL accept sender of type Object and e of type EventArgs.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-handles-communication-fo-0fee5756**: WHEN a caller invokes Application_Start, the Global SHALL initialize the application on startup.
+  - Acceptance criteria:
+    - AC1: WHEN Application_Start runs, the Global SHALL call RegisterRoutes, RegisterBundles, ConfigureContainer and ConfigDataBase.
+    - AC2: WHEN Application_Start is invoked, the Global SHALL accept sender of type object and e of type EventArgs.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-handles-communication-fo-3e33a8bc**: WHEN a caller invokes catalogBrandComboBox_SelectedIndexChanged, the CatalogView SHALL handle the change of the selected catalog brand.
+  - Acceptance criteria:
+    - AC1: WHEN catalogBrandComboBox_SelectedIndexChanged is invoked, the CatalogView SHALL accept sender of type object and e of type EventArgs.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-handles-communication-fo-0893c4bb**: WHEN a caller invokes catalogTypeComboBox_SelectedIndexChanged, the CatalogView SHALL handle the change of the selected catalog type.
+  - Acceptance criteria:
+    - AC1: WHEN catalogTypeComboBox_SelectedIndexChanged is invoked, the CatalogView SHALL accept sender of type object and e of type EventArgs.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-handles-configuration-fo-759c479d**: WHEN a caller invokes Configuration, the Startup SHALL configure the application services and middleware pipeline.
+  - Acceptance criteria:
+    - AC1: WHEN Configuration runs, the Startup SHALL call ConfigureAuth.
+    - AC2: WHEN Configuration is invoked, the Startup SHALL accept app of type IAppBuilder.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-handles-configuration-fo-3a02147e**: WHEN a caller invokes ConfigureContainer, the Global SHALL configure the dependency injection container.
+  - Acceptance criteria:
+    - AC1: WHEN ConfigureContainer runs, the Global SHALL store new ContainerProvider(container) in _containerProvider.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-handles-configuration-fo-b710b189**: WHEN a caller invokes IsEnabled, the CatalogConfiguration SHALL report whether it is enabled.
+  - Acceptance criteria:
+    - AC1: WHEN IsEnabled completes normally, the CatalogConfiguration SHALL return bool.Parse(ConfigurationManager.AppSettings[configurationKey]).
+    - AC2: WHEN IsEnabled is invoked, the CatalogConfiguration SHALL accept configurationKey of type string.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-handles-configuration-fo-06dbb7fd**: WHEN a caller invokes LazyInitialize, the OptionalKeyVaultConfigurationBuilder SHALL perform the lazy initialization of the key vault configuration.
+  - Acceptance criteria:
+    - AC1: WHEN LazyInitialize is invoked, the OptionalKeyVaultConfigurationBuilder SHALL accept name of type string and config of type NameValueCollection.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-handles-configuration-fo-cc1ecac4**: WHEN a caller invokes WebForm_DoPostBackWithOptions, the WebForms module SHALL submit the postback using the given postback options.
+  - Acceptance criteria:
+    - AC1: WHEN WebForm_DoPostBackWithOptions runs, the WebForms module SHALL set lastFocus.value to options.eventTarget, set lastFocus.value to active.id and set lastFocus.value to active.name.
+    - AC2: WHEN WebForm_DoPostBackWithOptions runs, the WebForms module SHALL call Page_ClientValidate.
+    - AC3: WHEN WebForm_DoPostBackWithOptions is invoked, the WebForms module SHALL accept options as input.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-handles-configuration-fo-ed198e31**: WHEN a caller invokes WebForm_EncodeCallback, the WebForms module SHALL encode the callback argument string.
+  - Acceptance criteria:
+    - AC1: IF encodeURIComponent, THEN the WebForms module SHALL return encodeURIComponent(parameter).
+    - AC2: IF !encodeURIComponent, THEN the WebForms module SHALL return escape(parameter).
+    - AC3: WHEN WebForm_EncodeCallback is invoked, the WebForms module SHALL accept parameter as input.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-handles-data-processing-768c2744**: WHEN a caller invokes TreeView_ProcessNodeData, the TreeView module SHALL handle data processing for the tree view process node data operation.
+  - Acceptance criteria:
+    - AC1: WHEN TreeView_ProcessNodeData runs, the TreeView module SHALL append newExpandState to context.data.expandState.value, set newDiv.innerHTML to chunk and call table.parentNode.insertBefore(newDiv.firstChild, table.nextSibling).
+    - AC2: WHEN TreeView_ProcessNodeData runs, the TreeView module SHALL call table.parentNode.insertBefore(newDiv.firstChild, table), call table.insertAdjacentHTML("afterEnd", chunk) and set treeNode.href.
+    - AC3: WHEN TreeView_ProcessNodeData runs, the TreeView module SHALL call indexOf, WebForm_GetParentByTagName and TreeView_ToggleNode.
+    - AC4: WHEN TreeView_ProcessNodeData is invoked, the TreeView module SHALL accept result and context as input.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-handles-data-processing-08df66b2**: WHEN a caller invokes ValidatorConvert, the WebUIValidation module SHALL handle data processing for the validator convert operation.
+  - Acceptance criteria:
+    - AC1: IF dataType == "Integer", THEN the WebUIValidation module SHALL return (isNaN(num) ? null : num).
+    - AC2: IF dataType == "Double", THEN the WebUIValidation module SHALL return (isNaN(num) ? null : num).
+    - AC3: IF dataType == "Currency", THEN the WebUIValidation module SHALL return (isNaN(num) ? null : num).
+    - AC4: WHEN ValidatorConvert runs, the WebUIValidation module SHALL call GetFullYear, match and toString.
+    - AC5: WHEN ValidatorConvert is invoked, the WebUIValidation module SHALL accept op and dataType as input.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-handles-data-processing-aa9f1a61**: WHEN a caller invokes WebPartManager_ProcessWebPartDragEnter, the WebParts module SHALL process the web part drag enter event data for the web part manager.
+  - Acceptance criteria:
+    - AC1: IF (typeof(dragState) != "undefined") && (dragState != null), THEN the WebParts module SHALL return true.
+    - AC2: WHEN WebPartManager_ProcessWebPartDragEnter runs, the WebParts module SHALL call Zone_GetParentZoneElement and __wpGetPageEventLocation.
+    - AC3: IF !((typeof(dragState) != "undefined") && (dragState != null)), THEN the WebParts module SHALL return false.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-handles-data-processing-932a1b1a**: WHEN a caller invokes WebPartManager_ProcessWebPartDragOver, the WebParts module SHALL process the web part drag over event data for the web part manager.
+  - Acceptance criteria:
+    - AC1: WHEN WebPartManager_ProcessWebPartDragOver runs, the WebParts module SHALL call Zone_GetParentZoneElement and __wpGetPageEventLocation.
+    - AC2: WHEN WebPartManager_ProcessWebPartDragOver completes normally, the WebParts module SHALL return handled.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-handles-data-processing-ff030da4**: WHEN a caller invokes WebPartManager_ProcessWebPartDrop, the WebParts module SHALL process the web part drop event data for the web part manager.
+  - Acceptance criteria:
+    - AC1: IF (typeof(dragState) != "undefined") && (dragState != null), THEN the WebParts module SHALL return true.
+    - AC2: WHEN WebPartManager_ProcessWebPartDrop runs, the WebParts module SHALL call Zone_GetParentZoneElement.
+    - AC3: IF !((typeof(dragState) != "undefined") && (dragState != null)), THEN the WebParts module SHALL return false.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-handles-logging-for-cata-7ea228bd**: WHEN a caller creates a CatalogServiceClient, the CatalogServiceClient SHALL initialize itself using the provided binding and remote address.
+  - Acceptance criteria:
+    - AC1: WHEN CatalogServiceClient is constructed, the CatalogServiceClient SHALL accept binding of type System.ServiceModel.Channels.Binding and remoteAddress of type System.ServiceModel.EndpointAddress.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-handles-logging-for-cata-91dd9c6b**: WHEN a caller creates a CatalogView, the CatalogView SHALL initialize itself to its default state.
+  - Acceptance criteria:
+    - AC1: WHEN CatalogView is constructed, the CatalogView SHALL call InitializeComponent.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-handles-logging-for-i-ca-5ff64085**: WHEN a caller invokes an operation of ICatalogView, the ICatalogView SHALL expose the operations SetController, SetCatalogItems, SetDiscountBanner, SetTypeFilter, SetBrandFilter, and four additional operations for configuring the catalog view.
+  - Acceptance criteria:
+    - AC1: The ICatalogView SHALL expose the operations SetController, SetCatalogItems, SetDiscountBanner, SetTypeFilter and SetBrandFilter (+4 more).
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-handles-logging-for-logo-d454b60d**: WHEN a caller invokes logout, the _AuthenticationService SHALL log the current user out and clear the authentication session.
+  - Acceptance criteria:
+    - AC1: WHEN logout is invoked, the _AuthenticationService SHALL accept c, a, b and d as input.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-handles-logging-for-set-ff2e1fb4**: WHEN a caller invokes set_defaultLogoutCompletedCallback, the _AuthenticationService SHALL set the default callback to be invoked when a logout operation completes.
+  - Acceptance criteria:
+    - AC1: WHEN set_defaultLogoutCompletedCallback is invoked, the _AuthenticationService SHALL accept a as input.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-handles-persistence-for-a19accdf**: WHEN a caller invokes Menu_RestoreInterval, the Menu module SHALL restore the previously saved menu interval setting.
+  - Acceptance criteria:
+    - AC1: WHEN Menu_RestoreInterval runs, the Menu module SHALL call Menu_ClearInterval and Menu_HideItems.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-handles-persistence-for-9a1986d6**: WHEN a caller invokes restoreFocus, the __smartNav SHALL restore keyboard focus to the previously focused element.
+  - Acceptance criteria:
+    - AC1: IF window.__smartNav.inPost == true, THEN the __smartNav SHALL stop without further processing.
+    - AC2: IF (typeof(ae) == "undefined") || (ae == null), THEN the __smartNav SHALL stop without further processing.
+    - AC3: WHEN restoreFocus runs, the __smartNav SHALL call focus.
+    - AC4: The __smartNav SHALL provide restoreFocus on the class itself, not on its instances.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-handles-persistence-for-f2c6f60e**: WHEN a caller invokes set_defaultSaveCompletedCallback, the _ProfileService SHALL set the default callback to be invoked when a save operation completes.
+  - Acceptance criteria:
+    - AC1: WHEN set_defaultSaveCompletedCallback is invoked, the _ProfileService SHALL accept a as input.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-handles-persistence-for-88042f41**: WHEN a caller invokes WebForm_RestoreScrollPosition, the WebForms module SHALL restore the page's scroll position to its previously saved value.
+  - Acceptance criteria:
+    - AC1: IF (typeof(theForm.oldOnLoad) != "undefined") && (theForm.oldOnLoad != null), THEN the WebForms module SHALL return theForm.oldOnLoad().
+    - AC2: WHEN WebForm_RestoreScrollPosition completes normally, the WebForms module SHALL return true.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-handles-persistence-for-8606525a**: WHEN a caller invokes WebForm_SaveScrollPositionOnSubmit, the WebForms module SHALL save the current scroll position prior to form submission.
+  - Acceptance criteria:
+    - AC1: IF (typeof(this.oldOnSubmit) != "undefined") && (this.oldOnSubmit != null), THEN the WebForms module SHALL return this.oldOnSubmit().
+    - AC2: WHEN WebForm_SaveScrollPositionOnSubmit runs, the WebForms module SHALL set theForm.__SCROLLPOSITIONX.value to WebForm_GetScrollX() and set theForm.__SCROLLPOSITIONY.value to WebForm_GetScrollY().
+    - AC3: WHEN WebForm_SaveScrollPositionOnSubmit runs, the WebForms module SHALL call WebForm_GetScrollX and WebForm_GetScrollY.
+    - AC4: WHEN WebForm_SaveScrollPositionOnSubmit completes normally, the WebForms module SHALL return true.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-handles-persistence-for-1f779140**: WHEN a caller invokes WebForm_SaveScrollPositionSubmit, the WebForms module SHALL save the current scroll position during form submission.
+  - Acceptance criteria:
+    - AC1: IF (typeof(this.oldSubmit) != "undefined") && (this.oldSubmit != null), THEN the WebForms module SHALL return this.oldSubmit().
+    - AC2: WHEN WebForm_SaveScrollPositionSubmit runs, the WebForms module SHALL set theForm.elements['__SCROLLPOSITIONY'].value to window.pageYOffset, set theForm.elements['__SCROLLPOSITIONX'].value to window.pageXOffset and set theForm.__SCROLLPOSITIONX.value to WebForm_GetScrollX().
+    - AC3: WHEN WebForm_SaveScrollPositionSubmit runs, the WebForms module SHALL set theForm.__SCROLLPOSITIONY.value to WebForm_GetScrollY().
+    - AC4: WHEN WebForm_SaveScrollPositionSubmit runs, the WebForms module SHALL call WebForm_GetScrollX and WebForm_GetScrollY.
+    - AC5: WHEN WebForm_SaveScrollPositionSubmit completes normally, the WebForms module SHALL return true.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-handles-retrieval-for-al-e57b6fa1**: WHEN eShopLegacyWebForms.ViewSwitcher.AlternateView is used, the ViewSwitcher SHALL expose the alternate view value as a string.
+  - Acceptance criteria:
+    - AC1: The ViewSwitcher SHALL expose AlternateView as a string property with a protected get accessor and a private set accessor.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-handles-retrieval-for-ca-899550a6**: WHEN eShopWCFService.EntityModel.CatalogItemsStocks is used, the EntityModel SHALL expose the catalog items stocks value as a DbSet&lt;CatalogItemsStock>.
+  - Acceptance criteria:
+    - AC1: The EntityModel SHALL expose CatalogItemsStocks as a DbSet&lt;CatalogItemsStock> property with public get and set accessors.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-handles-retrieval-for-cu-e2462a31**: WHEN eShopLegacyWebForms.ViewSwitcher.CurrentView is used, the ViewSwitcher SHALL expose the current view value as a string.
+  - Acceptance criteria:
+    - AC1: The ViewSwitcher SHALL expose CurrentView as a string property with a protected get accessor and a private set accessor.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-handles-retrieval-for-de-c60e63fd**: WHEN a caller invokes DetailsView_getHiddenFieldContents, the DetailsView module SHALL return the contents of the details view's hidden field.
+  - Acceptance criteria:
+    - AC1: WHEN DetailsView_getHiddenFieldContents completes normally, the DetailsView module SHALL return arg + "|" + this.stateField.value.
+    - AC2: WHEN DetailsView_getHiddenFieldContents is invoked, the DetailsView module SHALL accept arg as input.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-handles-retrieval-for-di-9d6efbdb**: WHEN eShopWCFService.EntityModel.DiscountItems is used, the EntityModel SHALL expose the discount items value as a DbSet&lt;DiscountItem>.
+  - Acceptance criteria:
+    - AC1: The EntityModel SHALL expose DiscountItems as a DbSet&lt;DiscountItem> property with public get and set accessors.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-handles-retrieval-for-gr-617084f7**: WHEN a caller invokes GridView_getHiddenFieldContents, the GridView module SHALL return the contents of the grid view's hidden field.
+  - Acceptance criteria:
+    - AC1: WHEN GridView_getHiddenFieldContents completes normally, the GridView module SHALL return arg + "|" + this.stateField.value.
+    - AC2: WHEN GridView_getHiddenFieldContents is invoked, the GridView module SHALL accept arg as input.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-handles-retrieval-for-is-eeda57f5**: WHEN a caller invokes isScriptLoaded, the _ScriptLoader SHALL report whether the requested script has finished loading.
+  - Acceptance criteria:
+    - AC1: The _ScriptLoader SHALL provide isScriptLoaded on the class itself, not on its instances.
+    - AC2: WHEN isScriptLoaded is invoked, the _ScriptLoader SHALL accept b as input.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-handles-retrieval-for-j-1853c02e**: WHEN a caller invokes JObject, the DeploymentHelper SHALL construct and return a JObject representing the provided data.
+  - Acceptance criteria:
+    - AC1: WHEN GetJsonFileContents completes normally, the DeploymentHelper SHALL return a value of type JObject.
+    - AC2: WHEN GetJsonFileContents is invoked, the DeploymentHelper SHALL accept pathToJson of type string.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-handles-retrieval-for-me-2d23e0d8**: WHEN a caller invokes Menu_FindMenu, the Menu module SHALL locate and return the menu element matching the specified identifier.
+  - Acceptance criteria:
+    - AC1: IF item && item.menu, THEN the Menu module SHALL return item.menu.
+    - AC2: IF menu, THEN the Menu module SHALL return menu.
+    - AC3: WHEN Menu_FindMenu runs, the Menu module SHALL call WebForm_GetElementById.
+    - AC4: WHEN Menu_FindMenu is invoked, the Menu module SHALL accept item as input.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-handles-retrieval-for-me-fef0c50b**: WHEN a caller invokes Menu_FindNext, the Menu module SHALL locate and return the next menu item relative to the current one.
+  - Acceptance criteria:
+    - AC1: IF match, THEN the Menu module SHALL return link.
+    - AC2: WHEN Menu_FindNext runs, the Menu module SHALL call WebForm_GetElementByTagName, Menu_FindParentContainer, WebForm_GetElementsByTagName and Menu_IsSelectable.
+    - AC3: WHEN Menu_FindNext completes normally, the Menu module SHALL return first.
+    - AC4: WHEN Menu_FindNext is invoked, the Menu module SHALL accept item as input.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-handles-retrieval-for-me-2ae7b714**: WHEN a caller invokes Menu_FindParentContainer, the Menu module SHALL locate and return the parent container element of the specified menu item.
+  - Acceptance criteria:
+    - AC1: IF item.menu_ParentContainerCache, THEN the Menu module SHALL return item.menu_ParentContainerCache.
+    - AC2: IF menu, THEN the Menu module SHALL return parent.
+    - AC3: WHEN Menu_FindParentContainer runs, the Menu module SHALL call WebForm_GetElementByTagName and Menu_FindMenu.
+    - AC4: WHEN Menu_FindParentContainer is invoked, the Menu module SHALL accept item as input.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-handles-retrieval-for-me-1adc0c5d**: WHEN a caller invokes Menu_FindParentItem, the Menu module SHALL locate and return the parent menu item of the specified menu item.
+  - Acceptance criteria:
+    - AC1: IF parentContainerID && parentContainerID.substr(len - 5) == "Items", THEN the Menu module SHALL return WebForm_GetElementById(parentItemID).
+    - AC2: WHEN Menu_FindParentItem runs, the Menu module SHALL call Menu_FindParentContainer and WebForm_GetElementById.
+    - AC3: WHEN Menu_FindParentItem is invoked, the Menu module SHALL accept item as input.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-handles-retrieval-for-me-fa92c268**: WHEN a caller invokes Menu_FindPrevious, the Menu module SHALL locate and return the previous menu item relative to the current one.
+  - Acceptance criteria:
+    - AC1: IF link == a && last, THEN the Menu module SHALL return last.
+    - AC2: WHEN Menu_FindPrevious runs, the Menu module SHALL call WebForm_GetElementByTagName, Menu_FindParentContainer, WebForm_GetElementsByTagName and Menu_IsSelectable.
+    - AC3: WHEN Menu_FindPrevious completes normally, the Menu module SHALL return last.
+    - AC4: WHEN Menu_FindPrevious is invoked, the Menu module SHALL accept item as input.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-handles-retrieval-for-me-87cc3e53**: WHEN a caller invokes Menu_FindSubMenu, the Menu module SHALL locate and return the submenu associated with the specified menu item.
+  - Acceptance criteria:
+    - AC1: WHEN Menu_FindSubMenu runs, the Menu module SHALL call WebForm_GetElementById.
+    - AC2: WHEN Menu_FindSubMenu completes normally, the Menu module SHALL return WebForm_GetElementById(tr.id + "Items").
+    - AC3: WHEN Menu_FindSubMenu is invoked, the Menu module SHALL accept item as input.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-handles-retrieval-for-me-be1c36bf**: WHEN a caller invokes Menu_GetData, the Menu module SHALL retrieve and return the data associated with the specified menu.
+  - Acceptance criteria:
+    - AC1: WHEN Menu_GetData runs, the Menu module SHALL call WebForm_GetElementByTagName and Menu_FindMenu.
+    - AC2: WHEN Menu_GetData completes normally, the Menu module SHALL return item.data.
+    - AC3: WHEN Menu_GetData is invoked, the Menu module SHALL accept item as input.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-handles-retrieval-for-mo-2c2afc39**: WHEN eShopLegacyWebForms._Default.Model is used, the _Default SHALL expose the model value as a PaginatedItemsViewModel&lt;CatalogItem>.
+  - Acceptance criteria:
+    - AC1: The _Default SHALL expose Model as a PaginatedItemsViewModel&lt;CatalogItem> property with protected get and set accessors.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-handles-retrieval-for-na-987b9584**: WHEN eShopLegacyWebForms.Models.CatalogItem.Name is used, the CatalogItem SHALL expose the name value as a string.
+  - Acceptance criteria:
+    - AC1: The CatalogItem SHALL expose Name as a string property with public get and set accessors.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-handles-retrieval-for-pa-12488454**: WHEN a caller invokes PageLoadedEventArgs, the WebForms SHALL construct and return event arguments describing the completed page load.
+  - Acceptance criteria:
+    - AC1: The WebForms SHALL provide PageLoadedEventArgs on the class itself, not on its instances.
+    - AC2: WHEN PageLoadedEventArgs is invoked, the WebForms SHALL accept b, a and c as input.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-handles-retrieval-for-pa-31e3c715**: WHEN a caller invokes PageLoadingEventArgs, the WebForms SHALL construct and return event arguments describing the in-progress page load.
+  - Acceptance criteria:
+    - AC1: The WebForms SHALL provide PageLoadingEventArgs on the class itself, not on its instances.
+    - AC2: WHEN PageLoadingEventArgs is invoked, the WebForms SHALL accept b, a and c as input.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-handles-retrieval-for-se-407edbf4**: WHEN a caller invokes set_defaultLoadCompletedCallback, the _ProfileService SHALL set the default callback to be invoked when a load operation completes.
+  - Acceptance criteria:
+    - AC1: WHEN set_defaultLoadCompletedCallback is invoked, the _ProfileService SHALL accept a as input.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-handles-retrieval-for-sw-19b6dcf3**: WHEN eShopLegacyWebForms.ViewSwitcher.SwitchUrl is used, the ViewSwitcher SHALL expose the switch url value as a string.
+  - Acceptance criteria:
+    - AC1: The ViewSwitcher SHALL expose SwitchUrl as a string property with a protected get accessor and a private set accessor.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-handles-retrieval-for-te-6fc36cb6**: WHEN eShopModernizedMVC.Models.CatalogItem.TempImageName is used, the CatalogItem SHALL expose the temp image name value as a string.
+  - Acceptance criteria:
+    - AC1: The CatalogItem SHALL expose TempImageName as a string property with public get and set accessors.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-handles-retrieval-for-tr-4845a462**: WHEN a caller invokes TreeView_GetNodeText, the TreeView module SHALL retrieve and return the display text of the specified tree node.
+  - Acceptance criteria:
+    - AC1: WHEN TreeView_GetNodeText runs, the TreeView module SHALL call WebForm_GetParentByTagName.
+    - AC2: WHEN TreeView_GetNodeText completes normally, the TreeView module SHALL return (textNode && textNode.nodeValue) ? textNode.nodeValue : "".
+    - AC3: WHEN TreeView_GetNodeText is invoked, the TreeView module SHALL accept node as input.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-handles-retrieval-for-up-a34ee02b**: WHEN a caller invokes UpLoadImageFromFile, the ImageAzureStorage SHALL upload the specified image file to Azure storage.
+  - Acceptance criteria:
+    - AC1: WHEN UpLoadImageFromFile is invoked, the ImageAzureStorage SHALL accept container of type CloudBlobContainer, blobName of type string, filePath of type string and contentType of type string.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-handles-retrieval-for-va-cc8c8bc7**: WHEN a caller invokes ValidatorGetValue, the WebUIValidation module SHALL retrieve and return the current value of the specified validated control.
+  - Acceptance criteria:
+    - AC1: IF typeof(control.value) == "string", THEN the WebUIValidation module SHALL return control.value.
+    - AC2: WHEN ValidatorGetValue runs, the WebUIValidation module SHALL call ValidatorGetValueRecursive.
+    - AC3: WHEN ValidatorGetValue completes normally, the WebUIValidation module SHALL return ValidatorGetValueRecursive(control).
+    - AC4: WHEN ValidatorGetValue is invoked, the WebUIValidation module SHALL accept id as input.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-handles-retrieval-for-va-fac0b551**: WHEN a caller invokes ValidatorGetValueRecursive, the WebUIValidation module SHALL recursively retrieve and return the current value of the specified validation control.
+  - Acceptance criteria:
+    - AC1: IF typeof(control.value) == "string" && (control.type != "radio" || control.checked == true), THEN the WebUIValidation module SHALL return control.value.
+    - AC2: IF val != "", THEN the WebUIValidation module SHALL return val.
+    - AC3: WHEN ValidatorGetValueRecursive completes normally, the WebUIValidation module SHALL return "".
+    - AC4: WHEN ValidatorGetValueRecursive is invoked, the WebUIValidation module SHALL accept control as input.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-handles-retrieval-for-va-bfd0a5e1**: WHEN a caller invokes ValidatorOnLoad, the WebUIValidation module SHALL initialize the validator objects and client-side validation state on page load.
+  - Acceptance criteria:
+    - AC1: IF typeof(Page_Validators) == "undefined", THEN the WebUIValidation module SHALL stop without further processing.
+    - AC2: WHEN ValidatorOnLoad runs, the WebUIValidation module SHALL call ValidatorHookupControlID.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-handles-retrieval-for-we-6d01381e**: WHEN a caller invokes WebForm_DoCallback, the WebForms module SHALL initiate an asynchronous postback callback request to the server with the specified parameters.
+  - Acceptance criteria:
+    - AC1: IF setRequestHeaderMethodExists, THEN the WebForms module SHALL stop without further processing.
+    - AC2: WHEN WebForm_DoCallback runs, the WebForms module SHALL set xmlRequestFrame.style.position to "absolute", set xmlRequestFrame.style.top to "-100px" xmlRequestFrame.style.left = "-100px" and set xmlRequestFrame.src to callBackFrameUrl.
+    - AC3: WHEN WebForm_DoCallback runs, the WebForms module SHALL call document.body.appendChild(xmlRequestFrame) and set fieldElement.value.
+    - AC4: WHEN the readystatechange event fires on xmlRequest, the WebForms module SHALL invoke WebForm_CallbackComplete.
+    - AC5: WHEN WebForm_DoCallback runs, the WebForms module SHALL call WebForm_EncodeCallback, XMLHttpRequest, WebForm_FillFirstAvailableSlot, indexOf and submit.
+    - AC6: WHEN WebForm_DoCallback is invoked, the WebForms module SHALL accept eventTarget, eventArgument, eventCallback, context and errorCallback (+1 more) as input.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-handles-retrieval-for-we-6bf8fbd5**: WHEN a caller invokes WebForm_FindFirstFocusableChild, the Focus module SHALL locate and return the first focusable child element within the specified element.
+  - Acceptance criteria:
+    - AC1: IF WebForm_CanFocus(children[i]), THEN the Focus module SHALL return children[i].
+    - AC2: IF WebForm_CanFocus(focused), THEN the Focus module SHALL return focused.
+    - AC3: WHEN WebForm_FindFirstFocusableChild runs, the Focus module SHALL call WebForm_CanFocus.
+    - AC4: WHEN WebForm_FindFirstFocusableChild is invoked, the Focus module SHALL accept control as input.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-handles-retrieval-for-we-b1a80368**: WHEN a caller invokes WebForm_FireDefaultButton, the WebForms module SHALL trigger a click on the specified default button when the Enter key is pressed in the associated control.
+  - Acceptance criteria:
+    - AC1: IF defaultButton, THEN the WebForms module SHALL return WebForm_SimulateClick(defaultButton, event).
+    - AC2: WHEN WebForm_FireDefaultButton runs, the WebForms module SHALL call WebForm_SimulateClick.
+    - AC3: WHEN WebForm_FireDefaultButton completes normally, the WebForms module SHALL return true.
+    - AC4: WHEN WebForm_FireDefaultButton is invoked, the WebForms module SHALL accept event and target as input.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-handles-retrieval-for-we-ed67c59d**: WHEN a caller invokes WebForm_GetElementById, the WebForms module SHALL return the DOM element matching the specified element ID.
+  - Acceptance criteria:
+    - AC1: IF document.getElementById, THEN the WebForms module SHALL return document.getElementById(elementId).
+    - AC2: IF document.all, THEN the WebForms module SHALL return document.all[elementId].
+    - AC3: WHEN WebForm_GetElementById is invoked, the WebForms module SHALL accept elementId as input.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-handles-retrieval-for-we-9de43691**: WHEN a caller invokes WebForm_GetElementByTagName, the WebForms module SHALL return the first element matching the specified tag name.
+  - Acceptance criteria:
+    - AC1: IF elements && elements.length > 0, THEN the WebForms module SHALL return elements[0].
+    - AC2: WHEN WebForm_GetElementByTagName runs, the WebForms module SHALL call WebForm_GetElementsByTagName.
+    - AC3: WHEN WebForm_GetElementByTagName is invoked, the WebForms module SHALL accept element and tagName as input.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-handles-retrieval-for-we-a7a7df64**: WHEN a caller invokes WebForm_GetElementDir, the WebForms module SHALL return the text direction attribute value of the specified element.
+  - Acceptance criteria:
+    - AC1: IF element, THEN the WebForms module SHALL return WebForm_GetElementDir(element.parentNode).
+    - AC2: IF element.dir, THEN the WebForms module SHALL return element.dir.
+    - AC3: IF !element, THEN the WebForms module SHALL return "ltr".
+    - AC4: WHEN WebForm_GetElementDir is invoked, the WebForms module SHALL accept element as input.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-handles-retrieval-for-we-50265c98**: WHEN a caller invokes WebForm_GetElementPosition, the WebForms module SHALL return the position (coordinates and dimensions) of the specified element.
+  - Acceptance criteria:
+    - AC1: WHEN WebForm_GetElementPosition completes normally, the WebForms module SHALL return result.
+    - AC2: WHEN WebForm_GetElementPosition is invoked, the WebForms module SHALL accept element as input.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-handles-retrieval-for-we-73c61847**: WHEN a caller invokes WebForm_GetElementsByTagName, the WebForms module SHALL return the collection of elements matching the specified tag name.
+  - Acceptance criteria:
+    - AC1: IF element.getElementsByTagName, THEN the WebForms module SHALL return element.getElementsByTagName(tagName).
+    - AC2: IF element.all && element.all.tags, THEN the WebForms module SHALL return element.all.tags(tagName).
+    - AC3: WHEN WebForm_GetElementsByTagName is invoked, the WebForms module SHALL accept element and tagName as input.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-handles-retrieval-for-we-91741694**: WHEN a caller invokes WebForm_GetParentByTagName, the WebForms module SHALL return the nearest ancestor element matching the specified tag name.
+  - Acceptance criteria:
+    - AC1: WHEN WebForm_GetParentByTagName completes normally, the WebForms module SHALL return parent.
+    - AC2: WHEN WebForm_GetParentByTagName is invoked, the WebForms module SHALL accept element and tagName as input.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-handles-retrieval-for-we-d58a59d9**: WHEN a caller invokes WebForm_GetScrollX, the WebForms module SHALL return 0.
+  - Acceptance criteria:
+    - AC1: IF __nonMSDOMBrowser, THEN the WebForms module SHALL return window.pageXOffset.
+    - AC2: IF document.documentElement && document.documentElement.scrollLeft, THEN the WebForms module SHALL return document.documentElement.scrollLeft.
+    - AC3: IF document.body, THEN the WebForms module SHALL return document.body.scrollLeft.
+    - AC4: WHEN WebForm_GetScrollX completes normally, the WebForms module SHALL return 0.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-handles-retrieval-for-we-a328e13d**: WHEN a caller invokes WebForm_GetScrollY, the WebForms module SHALL return 0.
+  - Acceptance criteria:
+    - AC1: IF __nonMSDOMBrowser, THEN the WebForms module SHALL return window.pageYOffset.
+    - AC2: IF document.documentElement && document.documentElement.scrollTop, THEN the WebForms module SHALL return document.documentElement.scrollTop.
+    - AC3: IF document.body, THEN the WebForms module SHALL return document.body.scrollTop.
+    - AC4: WHEN WebForm_GetScrollY completes normally, the WebForms module SHALL return 0.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-handles-retrieval-for-we-4c755f47**: WHEN a caller invokes WebPart_GetParentWebPartElement, the WebParts module SHALL return the nearest ancestor element identified as a web part.
+  - Acceptance criteria:
+    - AC1: WHEN WebPart_GetParentWebPartElement completes normally, the WebParts module SHALL return elem.
+    - AC2: WHEN WebPart_GetParentWebPartElement is invoked, the WebParts module SHALL accept containedElement as input.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-handles-retrieval-for-we-9dbe56d9**: WHEN a caller invokes WebPartManager_SubmitPage, the WebParts module SHALL submit the page containing the web part manager.
+  - Acceptance criteria:
+    - AC1: WHEN WebPartManager_SubmitPage is invoked, the WebParts module SHALL accept eventTarget and eventArgument as input.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-handles-retrieval-for-zo-f21d515c**: WHEN a caller invokes Zone_GetParentZoneElement, the WebParts module SHALL return the nearest ancestor element identified as a web part zone.
+  - Acceptance criteria:
+    - AC1: WHEN Zone_GetParentZoneElement completes normally, the WebParts module SHALL return elem.
+    - AC2: WHEN Zone_GetParentZoneElement is invoked, the WebParts module SHALL accept containedElement as input.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-handles-retrieval-for-zo-841f174f**: WHEN a caller invokes Zone_GetWebPartIndex, the WebParts module SHALL return the index position of the specified web part within its zone.
+  - Acceptance criteria:
+    - AC1: IF y < webPart.middleY, THEN the WebParts module SHALL return i.
+    - AC2: IF x < webPart.middleX, THEN the WebParts module SHALL return i.
+    - AC3: WHEN Zone_GetWebPartIndex completes normally, the WebParts module SHALL return webPartsCount.
+    - AC4: WHEN Zone_GetWebPartIndex is invoked, the WebParts module SHALL accept location as input.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-handles-validation-for-p-b06de2bb**: WHEN a caller invokes Page_ClientValidate, the WebUIValidation module SHALL validate all client-side validators in the specified validation group and return whether the page is valid.
+  - Acceptance criteria:
+    - AC1: IF typeof(Page_Validators) == "undefined", THEN the WebUIValidation module SHALL return true.
+    - AC2: WHEN Page_ClientValidate runs, the WebUIValidation module SHALL call ValidatorValidate, ValidatorUpdateIsValid and ValidationSummaryOnSubmit.
+    - AC3: WHEN Page_ClientValidate completes normally, the WebUIValidation module SHALL return Page_IsValid.
+    - AC4: WHEN Page_ClientValidate is invoked, the WebUIValidation module SHALL accept validationGroup as input.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-handles-validation-for-v-dd2d55ff**: WHEN a caller invokes ValidatedControlOnBlur, the WebUIValidation module SHALL trigger validation of the associated control when it loses focus.
+  - Acceptance criteria:
+    - AC1: WHEN ValidatedControlOnBlur runs, the WebUIValidation module SHALL call focus.
+    - AC2: WHEN ValidatedControlOnBlur is invoked, the WebUIValidation module SHALL accept event as input.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-handles-validation-for-v-82c78faa**: WHEN a caller invokes ValidatedTextBoxOnKeyPress, the WebUIValidation module SHALL trigger validation of the text box in response to a key press event.
+  - Acceptance criteria:
+    - AC1: IF event.keyCode == 13, THEN the WebUIValidation module SHALL return AllValidatorsValid(vals).
+    - AC2: WHEN ValidatedTextBoxOnKeyPress runs, the WebUIValidation module SHALL call ValidatorOnChange and AllValidatorsValid.
+    - AC3: WHEN ValidatedTextBoxOnKeyPress completes normally, the WebUIValidation module SHALL return true.
+    - AC4: WHEN ValidatedTextBoxOnKeyPress is invoked, the WebUIValidation module SHALL accept event as input.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-handles-validation-for-v-d2769b22**: WHEN a caller invokes ValidatorValidate, the WebUIValidation module SHALL evaluate the specified validator and update its validity status.
+  - Acceptance criteria:
+    - AC1: WHEN ValidatorValidate runs, the WebUIValidation module SHALL call IsValidationGroupMatch, ValidatorSetFocus and ValidatorUpdateDisplay.
+    - AC2: WHEN ValidatorValidate is invoked, the WebUIValidation module SHALL accept validationGroup and event as input.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-handles-validation-for-w-b7f0eedb**: WHEN a caller invokes WebPartManager_ExportWebPart, the WebParts module SHALL export the configuration of the specified web part.
+  - Acceptance criteria:
+    - AC1: IF confirm(__wpmExportWarning) == false, THEN the WebParts module SHALL return false.
+    - AC2: WHEN WebPartManager_ExportWebPart completes normally, the WebParts module SHALL return true.
+    - AC3: WHEN WebPartManager_ExportWebPart is invoked, the WebParts module SHALL accept exportUrl, warn and confirmOnly as input.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-initialize-component-071588d9**: WHEN a caller invokes InitializeComponent, the CatalogView SHALL initialize the component's UI elements and controls.
+  - Acceptance criteria:
+    - AC1: WHEN InitializeComponent runs, the CatalogView SHALL call this.tableLayoutPanel1.ColumnStyles.Add(), add this.tabControl to this.tableLayoutPanel1.Controls and add this.pictureBox3 to this.tableLayoutPanel1.Controls.
+    - AC2: WHEN InitializeComponent runs, the CatalogView SHALL add this.pictureBox2 to this.tableLayoutPanel1.Controls, add this.tableLayoutPanel5 to this.tableLayoutPanel1.Controls and call this.tableLayoutPanel1.RowStyles.Add().
+    - AC3: WHEN InitializeComponent runs, the CatalogView SHALL call Point.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-initialize-request-event-44ec872a**: WHEN a caller invokes InitializeRequestEventArgs, the WebForms SHALL initialize the request event arguments with the provided request data.
+  - Acceptance criteria:
+    - AC1: The WebForms SHALL provide InitializeRequestEventArgs on the class itself, not on its instances.
+    - AC2: WHEN InitializeRequestEventArgs is invoked, the WebForms SHALL accept c, b and a as input.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-load-brand-filters-1a12b62c**: WHEN a caller invokes LoadBrandFilters, the CatalogController SHALL return the brand filters.
+  - Acceptance criteria:
+    - AC1: WHEN LoadBrandFilters runs, the CatalogController SHALL call GetCatalogBrands and SetBrandFilter.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-load-catalog-items-34a36639**: WHEN a caller invokes LoadCatalogItems, the CatalogController SHALL return the catalog items for the given brand id filter and type id filter.
+  - Acceptance criteria:
+    - AC1: WHEN LoadCatalogItems runs, the CatalogController SHALL call ClearGrid, GetCatalogItems, GetDiscount and SetCatalogItems.
+    - AC2: WHEN LoadCatalogItems is invoked, the CatalogController SHALL accept brandIdFilter of type int and typeIdFilter of type int.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-load-new-content-4128937b**: WHEN a caller invokes loadNewContent, the __smartNav SHALL return the new content.
+  - Acceptance criteria:
+    - AC1: IF loadNewContent catches an error (e), THEN the __smartNav SHALL stop without further processing.
+    - AC2: WHEN loadNewContent runs, the __smartNav SHALL call hdm.removeChild(hdm.childNodes[i]), set k.innerText to kids[i].text and set o.innerHTML to "&lt;BODY>" + kids[i].outerHTML + "&lt;/BODY>".
+    - AC3: WHEN loadNewContent runs, the __smartNav SHALL call hdm.appendChild(k), call hifP.removeChild(sn.hif) and set document.body.innerHTML to s.
+    - AC4: WHEN the load event fires on document.body, the __smartNav SHALL invoke newBodyLoad.
+    - AC5: WHEN the load event fires on document.body, the __smartNav SHALL invoke sn._savedOnLoad.
+    - AC6: WHEN loadNewContent runs, the __smartNav SHALL call attachForm.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-load-scripts-7972dc54**: WHEN a caller invokes loadScripts, the _ScriptLoader SHALL return the scripts for the given d, b, c and a.
+  - Acceptance criteria:
+    - AC1: WHEN loadScripts is invoked, the _ScriptLoader SHALL accept d, b, c and a as input.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-load-type-filters-dbdf5ec2**: WHEN a caller invokes LoadTypeFilters, the CatalogController SHALL return the type filters.
+  - Acceptance criteria:
+    - AC1: WHEN LoadTypeFilters runs, the CatalogController SHALL call GetCatalogTypes and SetTypeFilter.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-load-view-28346b63**: WHEN a caller invokes LoadView, the CatalogController SHALL return the view.
+  - Acceptance criteria:
+    - AC1: WHEN LoadView runs, the CatalogController SHALL call SetController, CheckForDiscounts, LoadCatalogItems, LoadBrandFilters and LoadTypeFilters (+1 more).
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-provide-about-capability-959fc840**: WHEN a caller invokes an operation of About, the About SHALL provide the operation Page_Load.
+  - Acceptance criteria:
+    - AC1: The About SHALL expose the operation Page_Load.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-provide-app-settings-sql-fc7db141**: WHEN a caller invokes an operation of AppSettingsSqlConnectionFactory, the AppSettingsSqlConnectionFactory SHALL provide the operation SqlConnection.
+  - Acceptance criteria:
+    - AC1: The AppSettingsSqlConnectionFactory SHALL implement ISqlConnectionFactory.
+    - AC2: The AppSettingsSqlConnectionFactory SHALL expose the operation SqlConnection.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-provide-authentication-m-47576de3**: WHEN a caller invokes an operation of AuthenticationMiddleware, the AuthenticationMiddleware SHALL provide the operation Task.
+  - Acceptance criteria:
+    - AC1: The AuthenticationMiddleware SHALL expose the operation Task.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-provide-contact-capabili-be5bd33b**: WHEN a caller invokes an operation of Contact, the Contact SHALL provide the operation Page_Load.
+  - Acceptance criteria:
+    - AC1: The Contact SHALL expose the operation Page_Load.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-provide-deployment-helpe-9c562052**: WHEN a caller invokes an operation of DeploymentHelper, the DeploymentHelper SHALL provide the operations Run, JObject, EnsureResourceGroupExists and DeployTemplate.
+  - Acceptance criteria:
+    - AC1: The DeploymentHelper SHALL expose the operations Run, JObject, EnsureResourceGroupExists and DeployTemplate.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-provide-entity-model-cap-999a4272**: WHEN a caller invokes an operation of EntityModel, the EntityModel SHALL provide the operation OnModelCreating.
+  - Acceptance criteria:
+    - AC1: The EntityModel SHALL expose the operation OnModelCreating.
+    - AC2: The EntityModel SHALL expose the properties CatalogBrands, CatalogItems, CatalogItemsStocks, CatalogTypes and DiscountItems.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-provide-global-capabilit-77e7944f**: WHEN a caller invokes an operation of Global, the Global SHALL provide the operations Application_Start, Session_Start, ConfigureContainer, ConfigDataBase and Application_BeginRequest.
+  - Acceptance criteria:
+    - AC1: The Global SHALL expose the operations Application_Start, Session_Start, ConfigureContainer, ConfigDataBase and Application_BeginRequest.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-provide-image-azure-stor-14af1952**: WHEN a caller invokes an operation of ImageAzureStorage, the ImageAzureStorage SHALL provide the operations BaseUrl, BuildUrlImage, Dispose, InitializeCatalogImages and UpdateImage (+3 more).
+  - Acceptance criteria:
+    - AC1: The ImageAzureStorage SHALL implement IImageService.
+    - AC2: The ImageAzureStorage SHALL expose the operations BaseUrl, BuildUrlImage, Dispose, InitializeCatalogImages and UpdateImage (+3 more).
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-provide-image-mock-stora-ada62e5e**: WHEN a caller invokes an operation of ImageMockStorage, the ImageMockStorage SHALL provide the operations BaseUrl, BuildUrlImage, Dispose, InitializeCatalogImages and UpdateImage (+3 more).
+  - Acceptance criteria:
+    - AC1: The ImageMockStorage SHALL implement IImageService.
+    - AC2: The ImageMockStorage SHALL expose the operations BaseUrl, BuildUrlImage, Dispose, InitializeCatalogImages and UpdateImage (+3 more).
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-provide-initial-capabili-33c9fbf8**: WHEN a caller invokes an operation of Initial, the Initial SHALL provide the operation BuildTargetModel.
+  - Acceptance criteria:
+    - AC1: The Initial SHALL expose the operation BuildTargetModel.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-provide-managed-identity-0f7c96a3**: WHEN a caller invokes an operation of ManagedIdentitySqlConnectionFactory, the ManagedIdentitySqlConnectionFactory SHALL provide the operation SqlConnection.
+  - Acceptance criteria:
+    - AC1: The ManagedIdentitySqlConnectionFactory SHALL implement ISqlConnectionFactory.
+    - AC2: The ManagedIdentitySqlConnectionFactory SHALL expose the operation SqlConnection.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-provide-my-telemetry-ini-9f30097b**: WHEN a caller invokes an operation of MyTelemetryInitializer, the MyTelemetryInitializer SHALL provide the operation Initialize.
+  - Acceptance criteria:
+    - AC1: The MyTelemetryInitializer SHALL expose the operation Initialize.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-provide-optional-key-vau-a8c6e239**: WHEN a caller invokes an operation of OptionalKeyVaultConfigurationBuilder, the OptionalKeyVaultConfigurationBuilder SHALL provide the operation LazyInitialize.
+  - Acceptance criteria:
+    - AC1: The OptionalKeyVaultConfigurationBuilder SHALL expose the operation LazyInitialize.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-read-loaded-scripts-8c2f70ec**: WHEN a caller invokes readLoadedScripts, the _ScriptLoader SHALL return the list of scripts that have already been loaded.
+  - Acceptance criteria:
+    - AC1: The _ScriptLoader SHALL provide readLoadedScripts on the class itself, not on its instances.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-remove-begin-request-f83f2afa**: WHEN a caller invokes remove_beginRequest, the PageRequestManager SHALL remove the specified handler from the beginRequest event.
+  - Acceptance criteria:
+    - AC1: WHEN remove_beginRequest is invoked, the PageRequestManager SHALL accept a as input.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-remove-end-request-021ca8b8**: WHEN a caller invokes remove_endRequest, the PageRequestManager SHALL remove the specified handler from the endRequest event.
+  - Acceptance criteria:
+    - AC1: WHEN remove_endRequest is invoked, the PageRequestManager SHALL accept a as input.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-remove-initialize-reques-89a061da**: WHEN a caller invokes remove_initializeRequest, the PageRequestManager SHALL remove the specified handler from the initializeRequest event.
+  - Acceptance criteria:
+    - AC1: WHEN remove_initializeRequest is invoked, the PageRequestManager SHALL accept a as input.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-remove-page-loaded-f2057f4e**: WHEN a caller invokes remove_pageLoaded, the PageRequestManager SHALL remove the specified handler from the pageLoaded event.
+  - Acceptance criteria:
+    - AC1: WHEN remove_pageLoaded is invoked, the PageRequestManager SHALL accept a as input.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-remove-page-loading-291d6b16**: WHEN a caller invokes remove_pageLoading, the PageRequestManager SHALL remove the specified handler from the pageLoading event.
+  - Acceptance criteria:
+    - AC1: WHEN remove_pageLoading is invoked, the PageRequestManager SHALL accept a as input.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-save-click-5aebcb04**: WHEN a caller invokes Save_Click, the Edit SHALL save the current item's changes in response to the click event.
+  - Acceptance criteria:
+    - AC1: WHEN Save_Click runs, the Edit SHALL call CatalogService.UpdateCatalogItem(catalogItem).
+    - AC2: WHEN Save_Click is invoked, the Edit SHALL accept sender of type object and e of type EventArgs.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-save-history-a2a5558b**: WHEN a caller invokes saveHistory, the __smartNav SHALL store the current navigation state into history.
+  - Acceptance criteria:
+    - AC1: The __smartNav SHALL provide saveHistory on the class itself, not on its instances.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-save-persistence-ce14a1d6**: WHEN a caller invokes save, the _ProfileService SHALL persist the given data d to storage.
+  - Acceptance criteria:
+    - AC1: WHEN save is invoked, the _ProfileService SHALL accept d, b, c and e as input.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-search-availability-butt-927f3c5b**: WHEN a caller invokes searchAvailabilityButton_Click, the CatalogView SHALL handle the availability button click event for the given sender and e by initiating the availability search.
+  - Acceptance criteria:
+    - AC1: WHEN searchAvailabilityButton_Click runs, the CatalogView SHALL call ToString.
+    - AC2: WHEN searchAvailabilityButton_Click is invoked, the CatalogView SHALL accept sender of type object and e of type EventArgs.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-search-stock-available-72912ffd**: WHEN a caller invokes searchStockAvailable, the CatalogController SHALL retrieve and return the available stock for the given view and event arguments e.
+  - Acceptance criteria:
+    - AC1: WHEN searchStockAvailable runs, the CatalogController SHALL call GetAvailableStock and ShowStockAvailability.
+    - AC2: WHEN searchStockAvailable is invoked, the CatalogController SHALL accept view of type ICatalogView and e of type SearchStockEventArgs.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-search-stock-event-args-01909df4**: WHEN a caller creates a SearchStockEventArgs, the SearchStockEventArgs SHALL initialize its instance with the given id and date.
+  - Acceptance criteria:
+    - AC1: WHEN SearchStockEventArgs is constructed, the SearchStockEventArgs SHALL accept id of type int and thisDate of type DateTime.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-stop-hif-c467ac88**: WHEN a caller invokes stopHif, the __smartNav SHALL stop the hidden iframe (hif) used for navigation.
+  - Acceptance criteria:
+    - AC1: The __smartNav SHALL provide stopHif on the class itself, not on its instances.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-submit-as-part-workflow-e305058e**: WHEN a caller invokes submit, the __smartNav SHALL submit the current form as part of the navigation workflow.
+  - Acceptance criteria:
+    - AC1: WHEN submit runs, the __smartNav SHALL call init.
+    - AC2: The __smartNav SHALL provide submit on the class itself, not on its instances.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-update-helper-9fae8f27**: WHEN a caller invokes updateHelper, the __smartNav SHALL update the helper element's state used for navigation.
+  - Acceptance criteria:
+    - AC1: IF document.readyState != "complete", THEN the __smartNav SHALL stop without further processing.
+    - AC2: WHEN updateHelper runs, the __smartNav SHALL call loadNewContent.
+    - AC3: The __smartNav SHALL provide updateHelper on the class itself, not on its instances.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-build-model-ff8c4e22**: WHEN a caller invokes BuildModel, the CatalogDBContextModelSnapshot SHALL construct and populate the Entity Framework model snapshot.
+  - Acceptance criteria:
+    - AC1: WHEN BuildModel is invoked, the CatalogDBContextModelSnapshot SHALL accept modelBuilder of type ModelBuilder.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-build-target-model-a438e5f1**: WHEN a caller invokes BuildTargetModel, the Initial SHALL construct and populate the target Entity Framework model for the migration.
+  - Acceptance criteria:
+    - AC1: WHEN BuildTargetModel is invoked, the Initial SHALL accept modelBuilder of type ModelBuilder.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-deploy-as-part-workflow-ae073630**: WHEN a caller invokes deploy, the Deployer SHALL execute the deployment workflow.
+  - Acceptance criteria:
+    - AC1: WHEN deploy runs, the Deployer SHALL call parse.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-find-children-c1386d0e**: WHEN a caller invokes FindChildren, the DependencyObjectExtensions SHALL traverse the visual tree from the given start node and return the matching children in results.
+  - Acceptance criteria:
+    - AC1: WHEN FindChildren is invoked, the DependencyObjectExtensions SHALL accept startNode of type DependencyObject and results of type List&lt;T>.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-get-binding-endpoint-52fef177**: WHEN a caller invokes GetBindingForEndpoint, the CatalogServiceClient SHALL return the binding for the endpoint.
+  - Acceptance criteria:
+    - AC1: IF endpointConfiguration == EndpointConfiguration.BasicHttpBinding_ICatalogService, THEN the CatalogServiceClient SHALL return result.
+    - AC2: WHEN GetBindingForEndpoint runs, the CatalogServiceClient SHALL throw System.InvalidOperationException.
+    - AC3: WHEN GetBindingForEndpoint completes normally, the CatalogServiceClient SHALL return a value of type System.ServiceModel.Channels.Binding.
+    - AC4: WHEN GetBindingForEndpoint is invoked, the CatalogServiceClient SHALL accept endpointConfiguration of type EndpointConfiguration.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-get-default-binding-7d5fc1f2**: WHEN a caller invokes GetDefaultBinding, the CatalogServiceClient SHALL return the default service binding configuration.
+  - Acceptance criteria:
+    - AC1: WHEN GetDefaultBinding runs, the CatalogServiceClient SHALL call GetBindingForEndpoint.
+    - AC2: WHEN GetDefaultBinding completes normally, the CatalogServiceClient SHALL return CatalogServiceClient.GetBindingForEndpoint(EndpointConfiguration.BasicHttpBinding_ICatalogService).
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-get-default-endpoint-add-fe00e019**: WHEN a caller invokes GetDefaultEndpointAddress, the CatalogServiceClient SHALL return the default endpoint address of the service.
+  - Acceptance criteria:
+    - AC1: WHEN GetDefaultEndpointAddress runs, the CatalogServiceClient SHALL call GetEndpointAddress.
+    - AC2: WHEN GetDefaultEndpointAddress completes normally, the CatalogServiceClient SHALL return CatalogServiceClient.GetEndpointAddress(EndpointConfiguration.BasicHttpBinding_ICatalogService).
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-get-endpoint-address-caed034e**: WHEN a caller invokes GetEndpointAddress, the CatalogServiceClient SHALL throw System.InvalidOperationException.
+  - Acceptance criteria:
+    - AC1: IF endpointConfiguration == EndpointConfiguration.BasicHttpBinding_ICatalogService, THEN the CatalogServiceClient SHALL return new System.ServiceModel.EndpointAddress("http://localhost:5113/CatalogService.svc").
+    - AC2: WHEN GetEndpointAddress runs, the CatalogServiceClient SHALL throw System.InvalidOperationException.
+    - AC3: WHEN GetEndpointAddress completes normally, the CatalogServiceClient SHALL return a value of type System.ServiceModel.EndpointAddress.
+    - AC4: WHEN GetEndpointAddress is invoked, the CatalogServiceClient SHALL accept endpointConfiguration of type EndpointConfiguration.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-get-file-name-6e20bb87**: WHEN a caller invokes GetFileName, the SettingsStorageExtensions SHALL return the file name corresponding to the given name.
+  - Acceptance criteria:
+    - AC1: WHEN GetFileName completes normally, the SettingsStorageExtensions SHALL return string.Concat(name, fileExtension).
+    - AC2: WHEN GetFileName is invoked, the SettingsStorageExtensions SHALL accept name of type string.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-get-localized-30a62c53**: WHEN a caller invokes GetLocalized, the ResourceExtensions SHALL return the localized string for the given resource key.
+  - Acceptance criteria:
+    - AC1: WHEN GetLocalized completes normally, the ResourceExtensions SHALL return _resLoader.GetString(resourceKey).
+    - AC2: WHEN GetLocalized is invoked, the ResourceExtensions SHALL accept resourceKey of type string.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-handles-authentication-f-c1b2ff1e**: WHILE the caller supplies clientCredentials, WHEN a caller invokes ConfigureEndpoint, the CatalogServiceClient SHALL perform ConfigureEndpoint.
+  - Acceptance criteria:
+    - AC1: WHEN ConfigureEndpoint is invoked, the CatalogServiceClient SHALL accept serviceEndpoint of type System.ServiceModel.Description.ServiceEndpoint and clientCredentials of type System.ServiceModel.Description.ClientCredentials.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-handles-authentication-f-fcbbe7fc**: WHEN a caller invokes Login_Click, the SiteMaster SHALL redirect the user to the login page in response to the click event.
+  - Acceptance criteria:
+    - AC1: WHEN Login_Click is invoked, the SiteMaster SHALL accept sender of type object and e of type EventArgs.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-handles-authentication-f-e599e435**: WHEN a caller invokes Unnamed_LoggingOut, the SiteMaster SHALL sign the current user out of the application.
+  - Acceptance criteria:
+    - AC1: WHEN Unnamed_LoggingOut runs, the SiteMaster SHALL call SignOut.
+    - AC2: WHEN Unnamed_LoggingOut is invoked, the SiteMaster SHALL accept sender of type object and e of type LoginCancelEventArgs.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-handles-configuration-fo-a7436bbe**: WHEN a caller creates a CatalogDBContext, the CatalogDBContext SHALL initialize the context instance using the given options.
+  - Acceptance criteria:
+    - AC1: WHEN CatalogDBContext is constructed, the CatalogDBContext SHALL accept options of type DbContextOptions.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-handles-logging-for-show-7ce0efe8**: WHEN a caller invokes ShowToastNotification, the NotificationsHelper SHALL create a toast notifier and display the toast notification.
+  - Acceptance criteria:
+    - AC1: WHEN ShowToastNotification runs, the NotificationsHelper SHALL call ToastNotificationManager.CreateToastNotifier().
+    - AC2: WHEN ShowToastNotification is invoked, the NotificationsHelper SHALL accept title of type string and item of type CatalogItem.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-handles-logging-for-toas-1ff5e87b**: WHEN a caller invokes ToastContent, the NotificationsHelper SHALL construct and return the toast notification content.
+  - Acceptance criteria:
+    - AC1: WHEN GenerateToastContent runs, the NotificationsHelper SHALL add new AdaptiveImage { Source = item.PictureUri } to binding.Children.
+    - AC2: WHEN GenerateToastContent completes normally, the NotificationsHelper SHALL return new ToastContent { Visual = new ToastVisual { BindingGeneric = binding } }.
+    - AC3: WHEN GenerateToastContent is invoked, the NotificationsHelper SHALL accept title of type string and item of type CatalogItem.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-handles-persistence-for-ff69c023**: WHEN a caller invokes Task, the SettingsStorageExtensions SHALL perform Task.
+  - Acceptance criteria:
+    - AC1: WHEN SaveAsync runs, the SettingsStorageExtensions SHALL call StringifyAsync.
+    - AC2: WHEN SaveAsync is invoked, the SettingsStorageExtensions SHALL accept settings of type ApplicationDataContainer, key of type string and value of type T.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-handles-retrieval-for-i-adf78767**: WHEN a caller invokes IHttpHandler, the ServiceRouteHandler SHALL return the IHttpHandler instance for the request.
+  - Acceptance criteria:
+    - AC1: WHEN GetHttpHandler completes normally, the ServiceRouteHandler SHALL return a value of type IHttpHandler.
+    - AC2: WHEN GetHttpHandler is invoked, the ServiceRouteHandler SHALL accept requestContext of type RequestContext.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-handles-retrieval-for-t-d121083f**: WHEN a caller invokes T, the DependencyObjectExtensions SHALL return the requested value of type T.
+  - Acceptance criteria:
+    - AC1: IF parentObject is T parent, THEN the DependencyObjectExtensions SHALL return parent.
+    - AC2: IF !(parentObject is T parent), THEN the DependencyObjectExtensions SHALL return FindParent&lt;T>(parentObject).
+    - AC3: WHEN FindParent completes normally, the DependencyObjectExtensions SHALL return a value of type T.
+    - AC4: WHEN FindParent is invoked, the DependencyObjectExtensions SHALL accept startNode of type DependencyObject.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-provide-account-controll-038b8a66**: WHEN a caller invokes an operation of AccountController, the AccountController SHALL provide the operations SignIn, SignOut and EndSession.
+  - Acceptance criteria:
+    - AC1: The AccountController SHALL expose the operations SignIn, SignOut and EndSession.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-provide-action-tracer-fi-eb41b734**: WHEN a caller invokes an operation of ActionTracerFilter, the ActionTracerFilter SHALL provide the operation OnActionExecuting.
+  - Acceptance criteria:
+    - AC1: The ActionTracerFilter SHALL expose the operation OnActionExecuting.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-provide-catalog-brand-co-847cb0bf**: WHEN a caller invokes an operation of CatalogBrandConfig, the CatalogBrandConfig SHALL provide the operation Configure.
+  - Acceptance criteria:
+    - AC1: The CatalogBrandConfig SHALL expose the operation Configure.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-provide-catalog-db-conte-10bad047**: WHEN a caller invokes an operation of CatalogDBContextModelSnapshot, the CatalogDBContextModelSnapshot SHALL provide the operation BuildModel.
+  - Acceptance criteria:
+    - AC1: The CatalogDBContextModelSnapshot SHALL expose the operation BuildModel.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-provide-catalog-item-con-b8bf7591**: WHEN a caller invokes an operation of CatalogItemConfig, the CatalogItemConfig SHALL provide the operation Configure.
+  - Acceptance criteria:
+    - AC1: The CatalogItemConfig SHALL expose the operation Configure.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-provide-catalog-type-con-8767efb5**: WHEN a caller invokes an operation of CatalogTypeConfig, the CatalogTypeConfig SHALL provide the operation Configure.
+  - Acceptance criteria:
+    - AC1: The CatalogTypeConfig SHALL expose the operation Configure.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-provide-dependency-objec-22462d73**: WHEN a caller invokes an operation of DependencyObjectExtensions, the DependencyObjectExtensions SHALL provide the operations FindChildren and T.
+  - Acceptance criteria:
+    - AC1: The DependencyObjectExtensions SHALL expose the operations FindChildren and T.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-provide-deployer-capabil-10d05dbf**: WHEN a caller invokes an operation of Deployer, the Deployer SHALL provide the operation deploy.
+  - Acceptance criteria:
+    - AC1: The Deployer SHALL expose the operation deploy.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-provide-json-capability-17e9fec2**: WHEN a caller invokes an operation of Json, the Json SHALL provide the operations ToObjectAsync and StringifyAsync.
+  - Acceptance criteria:
+    - AC1: The Json SHALL expose the operations ToObjectAsync and StringifyAsync.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-provide-notifications-he-52b0e27c**: WHEN a caller invokes an operation of NotificationsHelper, the NotificationsHelper SHALL provide the operations ShowToastNotification and ToastContent.
+  - Acceptance criteria:
+    - AC1: The NotificationsHelper SHALL expose the operations ShowToastNotification and ToastContent.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-provide-pic-uploader-cap-138e76f8**: WHEN a caller invokes an operation of PicUploader, the PicUploader SHALL provide the operations UploadImage and IsValidImage.
+  - Acceptance criteria:
+    - AC1: The PicUploader SHALL expose the operations UploadImage and IsValidImage.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-provide-resource-extensi-21b728d3**: WHEN a caller invokes an operation of ResourceExtensions, the ResourceExtensions SHALL provide the operation GetLocalized.
+  - Acceptance criteria:
+    - AC1: The ResourceExtensions SHALL expose the operation GetLocalized.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-provide-service-route-ha-3c919e94**: WHEN a caller invokes an operation of ServiceRouteHandler, the ServiceRouteHandler SHALL provide the operation IHttpHandler.
+  - Acceptance criteria:
+    - AC1: The ServiceRouteHandler SHALL expose the operation IHttpHandler.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-provide-settings-storage-fd93f380**: WHEN a caller invokes an operation of SettingsStorageExtensions, the SettingsStorageExtensions SHALL provide the operations IsRoamingStorageAvailable, Task, ReadAsync, SaveFileAsync and ReadFileAsync (+2 more).
+  - Acceptance criteria:
+    - AC1: The SettingsStorageExtensions SHALL expose the operations IsRoamingStorageAvailable, Task, ReadAsync, SaveFileAsync and ReadFileAsync (+2 more).
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-provide-upload-image-hel-769d5581**: WHEN a caller invokes an operation of UploadImageHelper, the UploadImageHelper SHALL provide the operations UploadImageAsync and SaveImageAsync.
+  - Acceptance criteria:
+    - AC1: The UploadImageHelper SHALL expose the operations UploadImageAsync and SaveImageAsync.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-read-async-61cafbf5**: WHEN a caller invokes ReadAsync, the SettingsStorageExtensions SHALL asynchronously return the stored value for the given settings and key.
+  - Acceptance criteria:
+    - AC1: IF settings.Values.TryGetValue(key, out obj), THEN the SettingsStorageExtensions SHALL return await Json.ToObjectAsync&lt;T>((string)obj).
+    - AC2: WHEN Task completes normally, the SettingsStorageExtensions SHALL return default(T).
+    - AC3: WHEN Task is invoked, the SettingsStorageExtensions SHALL accept settings of type ApplicationDataContainer and key of type string.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-read-bytes-async-672b1546**: WHEN a caller invokes ReadBytesAsync, the SettingsStorageExtensions SHALL asynchronously return the bytes of the specified file.
+  - Acceptance criteria:
+    - AC1: WHEN ReadBytesAsync completes normally, the SettingsStorageExtensions SHALL return a value of type byte[].
+    - AC2: WHEN ReadBytesAsync is invoked, the SettingsStorageExtensions SHALL accept file of type StorageFile.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-read-file-async-98d3263c**: WHEN a caller invokes ReadFileAsync, the SettingsStorageExtensions SHALL asynchronously return the file contents for the given folder and file name.
+  - Acceptance criteria:
+    - AC1: IF (item != null) && item.IsOfType(StorageItemTypes.File), THEN the SettingsStorageExtensions SHALL return content.
+    - AC2: WHEN ReadFileAsync runs, the SettingsStorageExtensions SHALL call ReadBytesAsync.
+    - AC3: WHEN ReadFileAsync completes normally, the SettingsStorageExtensions SHALL return a value of type byte[].
+    - AC4: WHEN ReadFileAsync is invoked, the SettingsStorageExtensions SHALL accept folder of type StorageFolder and fileName of type string.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-save-file-async-84a0ef18**: WHEN a caller invokes SaveFileAsync, the SettingsStorageExtensions SHALL asynchronously persist the specified file.
+  - Acceptance criteria:
+    - AC1: IF content == null, THEN the SettingsStorageExtensions SHALL throw ArgumentNullException with the message "content".
+    - AC2: IF string.IsNullOrEmpty(fileName), THEN the SettingsStorageExtensions SHALL throw ArgumentException.
+    - AC3: WHEN SaveFileAsync completes normally, the SettingsStorageExtensions SHALL return storageFile.
+    - AC4: WHEN SaveFileAsync is invoked, the SettingsStorageExtensions SHALL accept folder of type StorageFolder, content of type byte[], fileName of type string and options of type CreationCollisionOption defaulting to CreationCollisionOption.ReplaceExisting.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-save-image-async-2e3325c0**: WHEN a caller invokes SaveImageAsync, the UploadImageHelper SHALL asynchronously persist the specified image.
+  - Acceptance criteria:
+    - AC1: IF file == null, THEN the UploadImageHelper SHALL return string.Empty.
+    - AC2: WHEN SaveImageAsync completes normally, the UploadImageHelper SHALL return targetFile.Path.
+    - AC3: WHEN SaveImageAsync is invoked, the UploadImageHelper SHALL accept file of type StorageFile.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-upload-image-async-93f62573**: WHEN a caller invokes UploadImageAsync, the UploadImageHelper SHALL asynchronously upload the specified image.
+  - Acceptance criteria:
+    - AC1: WHEN UploadImageAsync runs, the UploadImageHelper SHALL add ".jpg" to picker.FileTypeFilter, add ".bmp" to picker.FileTypeFilter and add ".gif" to picker.FileTypeFilter.
+    - AC2: WHEN UploadImageAsync runs, the UploadImageHelper SHALL add ".jpeg" to picker.FileTypeFilter and add ".png" to picker.FileTypeFilter.
+    - AC3: WHEN UploadImageAsync runs, the UploadImageHelper SHALL call SaveImageAsync.
+    - AC4: WHEN UploadImageAsync completes normally, the UploadImageHelper SHALL return await SaveImageAsync(file).
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **FR-upload-image-2511acd6**: WHEN a caller invokes UploadImage, the PicUploader SHALL upload the specified image.
+  - Acceptance criteria:
+    - AC1: IF !IsValidImage(image), THEN the PicUploader SHALL stop without further processing.
+    - AC2: WHEN UploadImage runs, the PicUploader SHALL call IsValidImage, UploadTempImage and JavaScriptSerializer.
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **NFR-DATA-16f4779c**: WHEN Up, Down, _commitControls or another supporting component persists or changes data, the system SHALL preserve data integrity across persistence and transaction boundaries.
+  - Acceptance criteria:
+    - AC1: WHEN an operation of eShopPorted.Migrations.Initial persists or changes data, the system SHALL preserve transactional data integrity (evidence: [Migration("20201130044339_Initial")] in eShopPorted.Migrations.Initial, 20201130044339_Initial.Designer.cs:12).
+    - AC2: WHEN an operation of eShopPorted.Migrations.Initial persists or changes data, the system SHALL preserve transactional data integrity (evidence: Migration in eShopPorted.Migrations.Initial, 20201130044339_Initial.cs:6).
+    - AC3: WHEN eShopPorted.Migrations.Initial.Up persists or changes data, the system SHALL preserve transactional data integrity (evidence: MigrationBuilder in eShopPorted.Migrations.Initial.Up, 20201130044339_Initial.cs:8).
+    - AC4: WHEN eShopPorted.Migrations.Initial.Down persists or changes data, the system SHALL preserve transactional data integrity (evidence: MigrationBuilder in eShopPorted.Migrations.Initial.Down, 20201130044339_Initial.cs:123).
+    - AC5: WHEN Sys.WebForms.PageRequestManager._commitControls persists or changes data, the system SHALL preserve transactional data integrity (evidence: _commitControls in Sys.WebForms.PageRequestManager._commitControls, MicrosoftAjaxWebForms.js:6).
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **NFR-SECURITY-4d0f2503**: WHEN a caller invokes _getTokenRegExp, get_defaultLoginCompletedCallback, set_defaultLoginCompletedCallback or another supporting component, the system SHALL authenticate and authorize access to protected operations.
+  - Acceptance criteria:
+    - AC1: WHEN a caller invokes an operation configured by eShopWinForms.Properties.Resources.LoginLogo, the system SHALL enforce authentication and authorization (evidence: LoginLogo in eShopWinForms.Properties.Resources.LoginLogo, Resources.Designer.cs:236).
+    - AC2: WHEN a caller invokes Date._getTokenRegExp, the system SHALL enforce authentication and authorization (evidence: _getTokenRegExp in Date._getTokenRegExp, MicrosoftAjax.js:6).
+    - AC3: WHEN a caller invokes Sys.Services._AuthenticationService.get_defaultLoginCompletedCallback, the system SHALL enforce authentication and authorization (evidence: get_defaultLoginCompletedCallback in Sys.Services._AuthenticationService.get_defaultLoginCompletedCallback, MicrosoftAjaxApplicationServices.js:6).
+    - AC4: WHEN a caller invokes Sys.Services._AuthenticationService.set_defaultLoginCompletedCallback, the system SHALL enforce authentication and authorization (evidence: set_defaultLoginCompletedCallback in Sys.Services._AuthenticationService.set_defaultLoginCompletedCallback, MicrosoftAjaxApplicationServices.js:6).
+    - AC5: WHEN a caller invokes Sys.Services._AuthenticationService.login, the system SHALL enforce authentication and authorization (evidence: login in Sys.Services._AuthenticationService.login, MicrosoftAjaxApplicationServices.js:6).
+    - AC6: WHEN a caller invokes Sys.Services._AuthenticationService._onLoginComplete, Sys.Services._AuthenticationService._onLoginFailed, Date._getTokenRegExp, an operation configured by eShopModernizedMVC.ManagedIdentitySqlConnectionFactory._provider or an operation configured by eShopModernizedMVC.ManagedIdentitySqlConnectionFactory.AccessToken (+12 more), the system SHALL enforce authentication and authorization (evidence: _onLoginComplete in Sys.Services._AuthenticationService._onLoginComplete, MicrosoftAjaxApplicationServices.js:6; _onLoginFailed in Sys.Services._AuthenticationService._onLoginFailed, MicrosoftAjaxApplicationServices.js:6; _getTokenRegExp in Date._getTokenRegExp, MicrosoftAjaxGlobalization.js:6; AzureServiceTokenProvider in eShopModernizedMVC.ManagedIdentitySqlConnectionFactory._provider, SqlAccessTokenProvider.cs:14; AccessToken in eShopModernizedMVC.ManagedIdentitySqlConnectionFactory.AccessToken, SqlAccessTokenProvider.cs:30 (+16 more)).
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
+- **NFR-SECURITY-742b03ce**: WHEN sensitive data is handled by SignIn or SignOut, the system SHALL protect data in transit and at rest using cryptographic controls.
+  - Acceptance criteria:
+    - AC1: WHEN sensitive data is handled by eShopModernizedMVC.Controllers.AccountController.SignIn, the system SHALL apply cryptographic protection (evidence: SignIn in eShopModernizedMVC.Controllers.AccountController.SignIn, AccountController.cs:14).
+    - AC2: WHEN sensitive data is handled by eShopModernizedMVC.Controllers.AccountController.SignOut, the system SHALL apply cryptographic protection (evidence: SignOut in eShopModernizedMVC.Controllers.AccountController.SignOut, AccountController.cs:23).
+  - Verdict: satisfied (evidence: unchanged)
+  - Reasoning: The implementing code did not change between the pre- and post-upgrade codebase, so the behaviour is preserved by construction.
+  - Caveat: Not executed at runtime; rests on the implementing location being unchanged, not on a passing test.
