@@ -1,7 +1,7 @@
-﻿using eShopLegacyMVC.Models;
+using eShopLegacyMVC.Models;
 using System.Collections.Generic;
-using System.Data.Entity;
 using System.Linq;
+using Microsoft.EntityFrameworkCore;
 using eShopLegacyMVC.ViewModel;
 
 namespace eShopLegacyMVC.Services
