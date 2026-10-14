@@ -1,8 +1,8 @@
-﻿using eShopLegacyMVC.Services;
+using eShopLegacyMVC.Services;
 using log4net;
+using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Mvc;
 using System.IO;
-using System.Net;
-using System.Web.Mvc;
 
 namespace eShopLegacyMVC.Controllers
 {
@@ -13,10 +13,12 @@ namespace eShopLegacyMVC.Controllers
         public const string GetPicRouteName = "GetPicRouteTemplate";
 
         private ICatalogService service;
+        private readonly IWebHostEnvironment env;
 
-        public PicController(ICatalogService service)
+        public PicController(ICatalogService service, IWebHostEnvironment env)
         {
             this.service = service;
+            this.env = env;
         }
 
         // GET: Pic/5.png
@@ -28,15 +30,16 @@ namespace eShopLegacyMVC.Controllers
 
             if (catalogItemId <= 0)
             {
-                return new HttpStatusCodeResult(HttpStatusCode.BadRequest);
+                return BadRequest();
             }
 
             var item = service.FindCatalogItem(catalogItemId);
 
             if (item != null)
             {
-                var webRoot = Server.MapPath("~/Pics");
-                var path = Path.Combine(webRoot, item.PictureFileName);
+                var webRoot = Path.Combine(env.ContentRootPath, "Pics");
+                // Only the file name is used so a crafted PictureFileName cannot escape the Pics folder
+                var path = Path.Combine(webRoot, Path.GetFileName(item.PictureFileName));
 
                 string imageFileExtension = Path.GetExtension(item.PictureFileName);
                 string mimetype = GetImageMimeTypeFromImageFileExtension(imageFileExtension);
@@ -46,7 +49,7 @@ namespace eShopLegacyMVC.Controllers
                 return File(buffer, mimetype);
             }
 
-            return HttpNotFound();
+            return NotFound();
         }
 
         private string GetImageMimeTypeFromImageFileExtension(string extension)

@@ -1,35 +1,47 @@
-﻿using System;
+using Microsoft.AspNetCore.Hosting;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
+using System;
 using System.Collections.Generic;
-using System.Configuration;
-using System.Data.Entity;
 using System.Globalization;
 using System.IO;
 using System.IO.Compression;
 using System.Linq;
 using System.Text.RegularExpressions;
-using System.Web;
-using System.Web.Hosting;
 
 namespace eShopLegacyMVC.Models.Infrastructure
 {
-    public class CatalogDBInitializer : CreateDatabaseIfNotExists<CatalogDBContext>
+    public class CatalogDBInitializer
     {
         private const string DBCatalogSequenceName = "catalog_type_hilo";
         private const string DBBrandSequenceName = "catalog_brand_hilo";
-        private const string CatalogItemHiLoSequenceScript = @"Models\Infrastructure\dbo.catalog_hilo.Sequence.sql";
-        private const string CatalogBrandHiLoSequenceScript = @"Models\Infrastructure\dbo.catalog_brand_hilo.Sequence.sql";
-        private const string CatalogTypeHiLoSequenceScript = @"Models\Infrastructure\dbo.catalog_type_hilo.Sequence.sql";
+        private static readonly string CatalogItemHiLoSequenceScript = Path.Combine("Models", "Infrastructure", "dbo.catalog_hilo.Sequence.sql");
+        private static readonly string CatalogBrandHiLoSequenceScript = Path.Combine("Models", "Infrastructure", "dbo.catalog_brand_hilo.Sequence.sql");
+        private static readonly string CatalogTypeHiLoSequenceScript = Path.Combine("Models", "Infrastructure", "dbo.catalog_type_hilo.Sequence.sql");
 
         private CatalogItemHiLoGenerator indexGenerator;
         private bool useCustomizationData;
+        private readonly string contentRootPath;
 
-        public CatalogDBInitializer(CatalogItemHiLoGenerator indexGenerator)
+        public CatalogDBInitializer(CatalogItemHiLoGenerator indexGenerator, IConfiguration configuration, IWebHostEnvironment environment)
         {
             this.indexGenerator = indexGenerator;
-            useCustomizationData = bool.Parse(ConfigurationManager.AppSettings["UseCustomizationData"]);
+            useCustomizationData = configuration.GetValue<bool>("UseCustomizationData");
+            contentRootPath = environment.ContentRootPath;
         }
 
-        protected override void Seed(CatalogDBContext context)
+        /// <summary>
+        /// Creates and seeds the database only if it does not exist yet (EF6 CreateDatabaseIfNotExists behaviour).
+        /// </summary>
+        public void InitializeDatabase(CatalogDBContext context)
+        {
+            if (context.Database.EnsureCreated())
+            {
+                Seed(context);
+            }
+        }
+
+        private void Seed(CatalogDBContext context)
         {
             ExecuteScript(context, CatalogItemHiLoSequenceScript);
             ExecuteScript(context, CatalogBrandHiLoSequenceScript);
@@ -94,7 +106,6 @@ namespace eShopLegacyMVC.Models.Infrastructure
 
         private IEnumerable<CatalogType> GetCatalogTypesFromFile()
         {
-            var contentRootPath = HostingEnvironment.ApplicationPhysicalPath;
             string csvFileCatalogTypes = Path.Combine(contentRootPath, "Setup", "CatalogTypes.csv");
 
             if (!File.Exists(csvFileCatalogTypes))
@@ -128,9 +139,8 @@ namespace eShopLegacyMVC.Models.Infrastructure
             };
         }
 
-        static IEnumerable<CatalogBrand> GetCatalogBrandsFromFile()
+        private IEnumerable<CatalogBrand> GetCatalogBrandsFromFile()
         {
-            var contentRootPath = HostingEnvironment.ApplicationPhysicalPath;
             string csvFileCatalogBrands = Path.Combine(contentRootPath, "Setup", "CatalogBrands.csv");
 
             if (!File.Exists(csvFileCatalogBrands))
@@ -164,9 +174,8 @@ namespace eShopLegacyMVC.Models.Infrastructure
             };
         }
 
-        static IEnumerable<CatalogItem> GetCatalogItemsFromFile(CatalogDBContext context)
+        private IEnumerable<CatalogItem> GetCatalogItemsFromFile(CatalogDBContext context)
         {
-            var contentRootPath = HostingEnvironment.ApplicationPhysicalPath;
             string csvFileCatalogItems = Path.Combine(contentRootPath, "Setup", "CatalogItems.csv");
 
             if (!File.Exists(csvFileCatalogItems))
@@ -325,15 +334,19 @@ namespace eShopLegacyMVC.Models.Infrastructure
 
         private static int GetSequenceIdFromSelectedDBSequence(CatalogDBContext context, string dBSequenceName)
         {
-            var rawQuery = context.Database.SqlQuery<Int64>($"SELECT NEXT VALUE FOR {dBSequenceName}");
-            var sequenceId = (int)rawQuery.Single();
+            // dBSequenceName is an internal constant (identifiers cannot be parameterized).
+            // AsEnumerable() prevents EF Core from composing over NEXT VALUE FOR (not allowed in a derived table).
+#pragma warning disable EF1002 // dBSequenceName is one of the private sequence-name constants above, never user input
+            var rawQuery = context.Database.SqlQueryRaw<Int64>($"SELECT NEXT VALUE FOR {dBSequenceName} AS Value");
+#pragma warning restore EF1002
+            var sequenceId = (int)rawQuery.AsEnumerable().Single();
             return sequenceId;
         }
 
         private void ExecuteScript(CatalogDBContext context, string scriptFile)
         {
             var scriptFilePath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, scriptFile);
-            context.Database.ExecuteSqlCommand(File.ReadAllText(scriptFilePath));
+            context.Database.ExecuteSqlRaw(File.ReadAllText(scriptFilePath));
         }
 
         private void AddCatalogItemPictures()
@@ -342,7 +355,6 @@ namespace eShopLegacyMVC.Models.Infrastructure
             {
                 return;
             }
-            var contentRootPath = HostingEnvironment.ApplicationPhysicalPath;
             DirectoryInfo picturePath = new DirectoryInfo(Path.Combine(contentRootPath, "Pics"));
             foreach (FileInfo file in picturePath.GetFiles())
             {
