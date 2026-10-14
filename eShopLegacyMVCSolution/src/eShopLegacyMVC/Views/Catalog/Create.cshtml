@@ -1,4 +1,4 @@
-﻿@model eShopLegacyMVC.Models.CatalogItem
+@model eShopLegacyMVC.Models.CatalogItem
 
 @{
     ViewBag.Title = "Create";
@@ -88,7 +88,7 @@
 
         <div class="form-group">
             <div class="col-md-offset-2 col-md-3 text-right esh-button-actions">
-                @Html.ActionLink("[ Cancel ]", "Index", null, new { @class = "btn esh-button esh-button-secondary" })
+                @Html.ActionLink("[ Cancel ]", "Index", routeValues: null, htmlAttributes: new { @class = "btn esh-button esh-button-secondary" })
                 <input type="submit" value="[ Create ]" class="btn esh-button esh-button-primary" />
             </div>
         </div>
@@ -100,5 +100,12 @@
 </div>
 
 @section Scripts {
-    @Scripts.Render("~/bundles/jqueryval")
+    <environment include="Development">
+        <script src="~/Scripts/jquery.validate.js"></script>
+        <script src="~/Scripts/jquery.validate.unobtrusive.js"></script>
+    </environment>
+    <environment exclude="Development">
+        <script src="~/Scripts/jquery.validate.min.js" asp-append-version="true"></script>
+        <script src="~/Scripts/jquery.validate.unobtrusive.min.js" asp-append-version="true"></script>
+    </environment>
 }

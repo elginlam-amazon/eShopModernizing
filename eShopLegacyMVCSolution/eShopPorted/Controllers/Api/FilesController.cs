@@ -1,7 +1,6 @@
-﻿using eShopLegacy.Utilities;
+using eShopLegacy.Utilities;
 using eShopPorted.Services;
 using Microsoft.AspNetCore.Mvc;
-using System;
 using System.Linq;
 
 namespace eShopPorted.Controllers
@@ -29,10 +28,10 @@ namespace eShopPorted.Controllers
 
             var data = serializer.SerializeBinary(brands);
 
-            return Ok(data);
+            // Return the serialized payload as the response body (as the legacy Web API StreamContent did).
+            return File(data, "application/json");
         }
 
-        [Serializable]
         public class BrandDTO
         {
             public int Id { get; set; }

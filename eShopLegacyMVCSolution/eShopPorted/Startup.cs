@@ -1,5 +1,4 @@
-﻿using Autofac;
-using Autofac.Extensions.DependencyInjection;
+using Autofac;
 using eShopPorted.Models;
 using eShopPorted.Modules;
 using Microsoft.AspNetCore.Builder;
@@ -7,6 +6,7 @@ using Microsoft.AspNetCore.Hosting;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using System;
 
 namespace eShopPorted
@@ -20,13 +20,13 @@ namespace eShopPorted
         public static DateTime StartTime { get; } = DateTime.UtcNow;
         public IConfiguration Configuration { get; }
 
+        private bool UseMockData => Configuration.GetValue<bool>("UseMockData");
+
         // This method gets called by the runtime. Use this method to add services to the container.
-        // For more information on how to configure your application, visit https://go.microsoft.com/fwlink/?LinkID=398940
-        public IServiceProvider ConfigureServices(IServiceCollection services)
+        public void ConfigureServices(IServiceCollection services)
         {
-            services.AddMvc();
-            bool useMockData = Configuration.GetValue<bool>("UseMockData");
-            if (!useMockData)
+            services.AddControllersWithViews();
+            if (!UseMockData)
             {
                 string connectionString = Configuration.GetConnectionString("DefaultConnection");
 
@@ -34,19 +34,16 @@ namespace eShopPorted
                     options.UseSqlServer(connectionString)
                 );
             }
+        }
 
-            // Create Autofac container builder
-            var builder = new ContainerBuilder();
-            builder.Populate(services);
-            builder.RegisterModule(new ApplicationModule(useMockData));
-
-            ILifetimeScope container = builder.Build();
-
-            return new AutofacServiceProvider(container);
+        // Autofac registrations; called by AutofacServiceProviderFactory after ConfigureServices.
+        public void ConfigureContainer(ContainerBuilder builder)
+        {
+            builder.RegisterModule(new ApplicationModule(UseMockData));
         }
 
         // This method gets called by the runtime. Use this method to configure the HTTP request pipeline.
-        public void Configure(IApplicationBuilder app, IHostingEnvironment env)
+        public void Configure(IApplicationBuilder app, IWebHostEnvironment env)
         {
             if (env.IsDevelopment())
             {
@@ -59,9 +56,11 @@ namespace eShopPorted
 
             app.UseStaticFiles();
 
-            app.UseMvc(routes =>
+            app.UseRouting();
+
+            app.UseEndpoints(endpoints =>
             {
-                routes.MapRoute("default", "{controller=Catalog}/{action=Index}/{id?}");
+                endpoints.MapControllerRoute("default", "{controller=Catalog}/{action=Index}/{id?}");
             });
         }
     }

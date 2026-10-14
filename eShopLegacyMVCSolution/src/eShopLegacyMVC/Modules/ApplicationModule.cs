@@ -1,4 +1,4 @@
-﻿using Autofac;
+using Autofac;
 using eShopLegacyMVC.Models;
 using eShopLegacyMVC.Models.Infrastructure;
 using eShopLegacyMVC.Services;
@@ -28,8 +28,7 @@ namespace eShopLegacyMVC.Modules
                     .InstancePerLifetimeScope();
             }
 
-            builder.RegisterType<CatalogDBContext>()
-                .InstancePerLifetimeScope();
+            // CatalogDBContext is registered (scoped) with services.AddDbContext in Program.cs
 
             builder.RegisterType<CatalogDBInitializer>()
                 .InstancePerLifetimeScope();
