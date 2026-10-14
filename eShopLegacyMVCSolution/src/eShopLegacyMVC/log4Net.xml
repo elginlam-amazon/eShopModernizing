@@ -1,10 +1,10 @@
-﻿<log4net>
+<log4net>
   <root>
     <level value="ALL" />
     <appender-ref ref="file" />
   </root>
   <appender name="file" type="log4net.Appender.RollingFileAppender">
-    <file value="logFiles\myapp.log" />
+    <file value="logFiles/myapp.log" />
     <appendToFile value="true" />
     <rollingStyle value="Size" />
     <maxSizeRollBackups value="5" />
