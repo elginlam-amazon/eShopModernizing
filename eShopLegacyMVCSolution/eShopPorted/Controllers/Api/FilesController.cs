@@ -29,7 +29,8 @@ namespace eShopPorted.Controllers
 
             var data = serializer.SerializeBinary(brands);
 
-            return Ok(data);
+            // Return the serialized payload as a binary stream (as the original Web API controller did)
+            return File(data, "application/octet-stream");
         }
 
         [Serializable]
