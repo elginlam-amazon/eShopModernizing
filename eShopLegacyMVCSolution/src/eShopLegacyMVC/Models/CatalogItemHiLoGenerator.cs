@@ -1,8 +1,6 @@
-﻿using eShopLegacyMVC.Models;
+using Microsoft.EntityFrameworkCore;
 using System;
-using System.Collections.Generic;
 using System.Linq;
-using System.Web;
 
 namespace eShopLegacyMVC.Models
 {
@@ -19,8 +17,9 @@ namespace eShopLegacyMVC.Models
             {
                 if (remainningLoIds == 0)
                 {
-                    var rawQuery = db.Database.SqlQuery<Int64>("SELECT NEXT VALUE FOR catalog_hilo;");
-                    sequenceId = (int)rawQuery.Single();
+                    // AsEnumerable() keeps EF Core from wrapping NEXT VALUE FOR in a subquery, which SQL Server rejects.
+                    var rawQuery = db.Database.SqlQueryRaw<Int64>("SELECT NEXT VALUE FOR catalog_hilo AS [Value]");
+                    sequenceId = (int)rawQuery.AsEnumerable().Single();
                     remainningLoIds = HiLoIncrement - 1;
                     return sequenceId;
                 }
