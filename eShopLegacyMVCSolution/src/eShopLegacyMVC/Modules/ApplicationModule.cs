@@ -28,8 +28,7 @@ namespace eShopLegacyMVC.Modules
                     .InstancePerLifetimeScope();
             }
 
-            builder.RegisterType<CatalogDBContext>()
-                .InstancePerLifetimeScope();
+            // CatalogDBContext is registered with AddDbContext in Program.cs (scoped, one per request).
 
             builder.RegisterType<CatalogDBInitializer>()
                 .InstancePerLifetimeScope();
